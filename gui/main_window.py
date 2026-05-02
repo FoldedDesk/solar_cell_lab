@@ -376,6 +376,7 @@ class ExperimentOneTab:
         self.tree.configure(yscrollcommand=vsb.set)
         self.tree.pack(side=tk.LEFT, fill=tk.BOTH, expand=True, padx=(8, 0))
         vsb.pack(side=tk.RIGHT, fill=tk.Y, padx=(0, 8))
+        self.tree.bind("<Double-1>", self._on_table_double_click)
 
     def _style_ax(self, ax, title="", xlabel="", ylabel=""):
         ax.set_facecolor("#0f0f23")
@@ -454,6 +455,86 @@ class ExperimentOneTab:
             vals = list(self.tree.item(item_id, "values"))
             vals[0] = i + 1
             self.tree.item(item_id, values=vals)
+
+    def _on_table_double_click(self, event):
+        item_id = self.tree.identify_row(event.y)
+        col_id = self.tree.identify_column(event.x)
+        if not item_id or not col_id:
+            return
+
+        # 仅允许编辑 R/U/I 三列；序号和 P 由程序维护
+        if col_id in ("#1", "#5"):
+            self._show_toast("该列不可编辑")
+            return
+
+        cols_map = {"#2": ("R", "R (Ω)"), "#3": ("U", "U (V)"), "#4": ("I", "I (mA)")}
+        if col_id not in cols_map:
+            return
+        field, field_text = cols_map[col_id]
+
+        items = self.tree.get_children()
+        row_idx = items.index(item_id)
+        old_val = self.data_points[row_idx][field]
+
+        dlg = tk.Toplevel(self.frame.winfo_toplevel())
+        dlg.title("修改数据")
+        dlg.configure(bg=BG)
+        dlg.geometry("320x170")
+        dlg.resizable(False, False)
+        dlg.grab_set()
+
+        tk.Label(dlg, text="编辑 {}".format(field_text), bg=ACCENT, fg="#fff",
+                 font=("Microsoft YaHei", 12, "bold")).pack(fill=tk.X, ipady=6)
+        tk.Label(dlg, text="原值: {:.3f}".format(old_val), bg=BG, fg="#aaa",
+                 font=("Consolas", 10)).pack(pady=(14, 8))
+
+        v = tk.StringVar(value=str(old_val))
+        e = tk.Entry(dlg, textvariable=v, font=("Consolas", 12), width=16,
+                     bg="#1a1a1a", fg="#00ff88", insertbackground="#00ff88",
+                     relief=tk.SUNKEN, bd=2)
+        e.pack()
+        e.focus_set()
+        e.selection_range(0, tk.END)
+
+        def submit():
+            try:
+                new_val = float(v.get().strip())
+                if new_val < 0:
+                    raise ValueError
+            except ValueError:
+                self._show_toast("请输入有效数字（>=0）")
+                return
+
+            if field == "R":
+                for i, dp in enumerate(self.data_points):
+                    if i != row_idx and abs(dp["R"] - new_val) < 1e-9:
+                        self._show_toast("已存在相同 R，不能重复")
+                        return
+
+            self.data_points[row_idx][field] = new_val
+            self.data_points[row_idx]["P"] = self.data_points[row_idx]["U"] * self.data_points[row_idx]["I"]
+
+            dp = self.data_points[row_idx]
+            self.tree.item(item_id, values=(
+                row_idx + 1,
+                "{:g}".format(dp["R"]),
+                "{:.3f}".format(dp["U"]),
+                "{:.3f}".format(dp["I"]),
+                "{:.3f}".format(dp["P"]),
+            ))
+
+            if len(self.data_points) >= 10:
+                self._draw_plot()
+            dlg.destroy()
+
+        btns = tk.Frame(dlg, bg=BG)
+        btns.pack(fill=tk.X, padx=24, pady=16)
+        tk.Button(btns, text="确认", bg="#2a6", fg="#fff", relief=tk.FLAT,
+                  font=("Microsoft YaHei", 10, "bold"), command=submit).pack(side=tk.LEFT, expand=True, padx=4)
+        tk.Button(btns, text="取消", bg="#644", fg="#fff", relief=tk.FLAT,
+                  font=("Microsoft YaHei", 10), command=dlg.destroy).pack(side=tk.LEFT, expand=True, padx=4)
+        dlg.bind("<Return>", lambda _e: submit())
+        dlg.bind("<Escape>", lambda _e: dlg.destroy())
 
     def _show_toast(self, msg):
         toast = tk.Toplevel(self.frame.winfo_toplevel())
@@ -590,8 +671,9 @@ class ExperimentOneTab:
         min_r_point = min(self.data_points, key=lambda d: d["R"])
         Uoc_exp = max_r_point["U"]
         Isc_exp = min_r_point["I"]
-        # FF = Pmax / (Uoc × Isc)，单位：mW / (V × mA) = 无量纲
-        FF = max_p / (Uoc_exp * Isc_exp) if (Uoc_exp * Isc_exp) > 0 else 0
+        # FF = Im*Um / (Isc*Uoc)，按百分数显示
+        FF = (Im * Um) / (Isc_exp * Uoc_exp) if (Uoc_exp * Isc_exp) > 0 else 0
+        FF_percent = FF * 100.0
 
         win = tk.Toplevel(self.frame.winfo_toplevel())
         win.title("数据分析结果")
@@ -601,10 +683,7 @@ class ExperimentOneTab:
 
         tk.Label(win, text="数据分析结果", bg=ACCENT, fg="#fff",
                  font=("Microsoft YaHei", 14, "bold")).pack(fill=tk.X, ipady=8)
-        tk.Label(win, text="基于 {} 组实验数据".format(len(self.data_points)),
-                 bg=BG, fg="#888", font=("Microsoft YaHei", 10)).pack(pady=(10, 16))
-        tk.Label(win, text="计算仅使用已记录实测点，不进行拟合或外推",
-                 bg=BG, fg="#aaa", font=("Microsoft YaHei", 9)).pack(pady=(0, 10))
+        tk.Label(win, text="", bg=BG).pack(pady=(8, 6))
 
         table = tk.Frame(win, bg=PANEL_BG)
         table.pack(fill=tk.X, padx=30)
@@ -613,10 +692,9 @@ class ExperimentOneTab:
             ("最佳负载电阻 R₀", "{:g} Ω".format(R0)),
             ("最佳工作电压 Uₘ", "{:.3f} V".format(Um)),
             ("最佳工作电流 Iₘ", "{:.3f} mA".format(Im)),
-            ("最大输出功率 Pₘₐₓ", "{:.3f} mW".format(max_p)),
-            ("开路电压 Uoc (实测点近似)", "{:.3f} V".format(Uoc_exp)),
-            ("短路电流 Isc (实测点近似)", "{:.3f} mA".format(Isc_exp)),
-            ("填充因子 F·F", "{:.4f}".format(FF)),
+            ("开路电压 Uoc", "{:.3f} V".format(Uoc_exp)),
+            ("短路电流 Isc", "{:.3f} mA".format(Isc_exp)),
+            ("填充因子 F·F", "{:.2f} %".format(FF_percent)),
         ]
 
         for i, (label, value) in enumerate(results):
