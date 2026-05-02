@@ -14,7 +14,10 @@ from matplotlib.figure import Figure
 from matplotlib.backends.backend_tkagg import FigureCanvasTkAgg
 import matplotlib.font_manager as fm
 
-plt_font = fm.FontProperties(family="Microsoft YaHei")
+# macOS/Windows 中文兼容字体回退
+plt_font = fm.FontProperties(family=[
+    "PingFang SC", "Hiragino Sans GB", "Microsoft YaHei", "STHeiti", "SimHei"
+])
 
 import sys, os
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
@@ -151,11 +154,18 @@ class ExperimentOneTab:
         self.params = {k: v for k, v in DEFAULT_PARAMS["single"].items()}
         self.data_points = []
         self.distance_cm = 30.0
-        self.light_intensity = 1000.0
+        self.light_intensity = 242.0
+        self.wires = set()
+        self.term_pos = {}
+        self.term_degree = {}
+        self.drag_start_term = None
+        self.drag_line_id = None
+        self.connection_ok = False
+        self.last_auto_record_r = None
         self._build()
 
     def _build(self):
-        left = tk.Frame(self.frame, bg=PANEL_BG, width=280)
+        left = tk.Frame(self.frame, bg=PANEL_BG, width=360)
         left.pack(side=tk.LEFT, fill=tk.Y, padx=(0, 6))
         left.pack_propagate(False)
         right = tk.Frame(self.frame, bg=BG)
@@ -179,22 +189,18 @@ class ExperimentOneTab:
         # 电阻箱（含 ×0.1）+ 手动输入框
         self._build_resistance_box(parent)
 
-        ttk.Separator(parent, orient="horizontal").pack(fill=tk.X, padx=10, pady=6)
-
         # 固定条件
         info = tk.Frame(parent, bg=PANEL_BG)
         info.pack(fill=tk.X, padx=10, pady=4)
         tk.Label(info, text="固定条件:", bg=PANEL_BG, fg="#888",
                  font=("Microsoft YaHei", 9)).pack(anchor="w")
-        tk.Label(info, text="  光源功率: 100 W", bg=PANEL_BG, fg=FG,
-                 font=("Microsoft YaHei", 9)).pack(anchor="w")
-        tk.Label(info, text="  光源-板距离: 30 cm", bg=PANEL_BG, fg=FG,
+        tk.Label(info, text="  光强 I: 242 W/m²", bg=PANEL_BG, fg=FG,
                  font=("Microsoft YaHei", 9)).pack(anchor="w")
 
         ttk.Separator(parent, orient="horizontal").pack(fill=tk.X, padx=10, pady=6)
 
         # 操作按钮
-        tk.Button(parent, text="● 记录数据（手动输入）",
+        tk.Button(parent, text="● 自动采集并记录",
                   bg=ACCENT, fg="#fff", font=("Microsoft YaHei", 11, "bold"),
                   activebackground="#ff8855", relief=tk.FLAT,
                   command=self._record_point).pack(fill=tk.X, padx=10, pady=4, ipady=4)
@@ -205,19 +211,226 @@ class ExperimentOneTab:
                   font=("Microsoft YaHei", 10), relief=tk.FLAT,
                   activebackground="#3b7",
                   command=self._draw_plot).pack(side=tk.LEFT, expand=True, fill=tk.X, padx=2)
-        tk.Button(btn_frame, text="清除数据", bg="#644", fg="#fff",
-                  font=("Microsoft YaHei", 10), relief=tk.FLAT,
-                  activebackground="#855",
-                  command=self._clear_data).pack(side=tk.LEFT, expand=True, fill=tk.X, padx=2)
-        tk.Button(parent, text="导入实验一实测标准数据", bg="#885500", fg="#fff",
-                  font=("Microsoft YaHei", 10, "bold"), relief=tk.FLAT,
-                  activebackground="#aa7722",
-                  command=self._load_standard_data).pack(fill=tk.X, padx=10, pady=2, ipady=3)
 
         tk.Button(parent, text="数据分析", bg="#2266cc", fg="#fff",
                   font=("Microsoft YaHei", 11, "bold"),
                   activebackground="#3377dd", relief=tk.FLAT,
                   command=self._show_analysis).pack(fill=tk.X, padx=10, pady=6, ipady=4)
+
+        ttk.Separator(parent, orient="horizontal").pack(fill=tk.X, padx=10, pady=6)
+
+        # 接线场景（放在按钮区后，避免绘图按钮被挤出可视区域）
+        self._build_wiring_scene(parent)
+
+    def _build_wiring_scene(self, parent):
+        tk.Label(parent, text="━━━ 实验接线场景 ━━━", bg=PANEL_BG, fg=ACCENT,
+                 font=("Microsoft YaHei", 10, "bold")).pack(anchor="w", padx=10, pady=(0, 2))
+        self.wire_status = tk.Label(parent, text="接线状态: 未完成", bg=PANEL_BG, fg="#ffcc66",
+                                    font=("Microsoft YaHei", 9))
+        self.wire_status.pack(anchor="w", padx=10, pady=(0, 4))
+
+        self.scene = tk.Canvas(parent, width=250, height=320, bg="#101524",
+                               highlightthickness=1, highlightbackground="#2d3c5a")
+        self.scene.pack(padx=10, pady=2)
+        self.scene.bind("<ButtonPress-1>", self._on_scene_press)
+        self.scene.bind("<B1-Motion>", self._on_scene_drag)
+        self.scene.bind("<ButtonRelease-1>", self._on_scene_release)
+        tk.Button(parent, text="测试自动接线", bg="#4455aa", fg="#fff",
+                  font=("Microsoft YaHei", 9, "bold"),
+                  activebackground="#5566bb", relief=tk.FLAT,
+                  command=self._auto_wire_for_test).pack(fill=tk.X, padx=10, pady=(2, 4), ipady=2)
+        self._draw_scene()
+
+    def _add_device(self, x, y, w, h, title, fill):
+        self.scene.create_rectangle(x + 3, y + 3, x + w + 3, y + h + 3, fill="#0a0f1c", outline="", width=0)
+        self.scene.create_rectangle(x, y, x + w, y + h, fill=fill, outline="#5f79a8", width=1)
+        self.scene.create_rectangle(x + 1, y + 1, x + w - 1, y + 16, fill="#22365d", outline="", width=0)
+        self.scene.create_text(x + w / 2, y + 9, text=title, fill="#e8f1ff",
+                               font=("Microsoft YaHei", 8, "bold"))
+
+    def _add_terminal(self, term_id, x, y, mark=""):
+        r = 4
+        self.term_pos[term_id] = (x, y)
+        self.scene.create_oval(x - r, y - r, x + r, y + r, fill="#ffd166", outline="#ffe7a6",
+                               width=1, tags=("terminal", "term_" + term_id))
+        if mark:
+            self.scene.create_text(x, y - 10, text=mark, fill="#9bb2dd", font=("Consolas", 8, "bold"))
+
+    def _draw_scene(self):
+        self.scene.delete("all")
+        self.term_pos.clear()
+        self.term_degree = {
+            "panel_p": 0, "panel_n": 0,
+            "amm_p": 0, "amm_n": 0,
+            "res_p": 0, "res_n": 0,
+            "vol_p": 0, "vol_n": 0
+        }
+        self.drag_start_term = None
+        self.drag_line_id = None
+        self.connection_ok = False
+        self.wires.clear()
+
+        # 桌面背景
+        self.scene.create_rectangle(6, 8, 244, 302, fill="#0f1b33", outline="#2f4f86", width=1)
+        self.scene.create_rectangle(12, 14, 238, 296, fill="#132548", outline="#1f3a6a", width=1)
+        self.scene.create_text(125, 24, text="实验一接线台", fill="#c8dcff",
+                               font=("Microsoft YaHei", 9, "bold"))
+
+        # 器件布局（更接近真实接线台）
+        self._add_device(18, 34, 95, 46, "100W 灯", "#3a2f1b")
+        self._add_device(136, 34, 96, 62, "太阳能板", "#17324a")
+        self._add_device(18, 108, 84, 50, "电流表", "#1f3f2b")
+        self._add_device(146, 114, 86, 44, "电阻箱", "#40291f")
+        self._add_device(58, 196, 132, 56, "电压表", "#33295a")
+
+        # 光源与太阳能板细节
+        self.scene.create_oval(30, 47, 58, 75, fill="#ffd36a", outline="#ffe8a5", width=1)
+        self.scene.create_oval(36, 53, 52, 69, fill="#fff2c0", outline="", width=0)
+        self.scene.create_line(62, 52, 78, 52, fill="#ffcf66", width=1)
+        self.scene.create_line(62, 60, 80, 60, fill="#ffcf66", width=1)
+        self.scene.create_line(62, 68, 78, 68, fill="#ffcf66", width=1)
+        self.scene.create_rectangle(154, 52, 222, 86, fill="#204a68", outline="#4e87af", width=1)
+        for gx in (170, 186, 202):
+            self.scene.create_line(gx, 53, gx, 85, fill="#6fb4d8", width=1)
+        for gy in (63, 74):
+            self.scene.create_line(155, gy, 221, gy, fill="#6fb4d8", width=1)
+
+        # 仪表/电阻箱细节
+        self.scene.create_oval(34, 118, 78, 152, fill="#0e1e18", outline="#6dd39b", width=1)
+        self.scene.create_line(56, 135, 70, 124, fill="#8df0bf", width=2)
+        self.scene.create_text(56, 136, text="A", fill="#8df0bf", font=("Consolas", 8, "bold"))
+        self.scene.create_rectangle(158, 124, 222, 144, fill="#0f131d", outline="#ff9f5f", width=1)
+        self.scene.create_text(190, 134, text="R BOX", fill="#ffb27f", font=("Consolas", 8, "bold"))
+        self.scene.create_oval(76, 210, 118, 244, fill="#1b1836", outline="#9c8cff", width=1)
+        self.scene.create_line(97, 227, 110, 216, fill="#b9abff", width=2)
+        self.scene.create_text(98, 228, text="V", fill="#b9abff", font=("Consolas", 8, "bold"))
+
+        self._add_terminal("panel_p", 136, 52, "+")
+        self._add_terminal("panel_n", 136, 78, "-")
+        self._add_terminal("amm_p", 18, 124, "+")
+        self._add_terminal("amm_n", 18, 146, "-")
+        self._add_terminal("res_p", 146, 128, "+")
+        self._add_terminal("res_n", 146, 146, "-")
+        self._add_terminal("vol_p", 58, 214, "+")
+        self._add_terminal("vol_n", 58, 236, "-")
+
+        self.scene.create_text(125, 276, text="从端子拖拽到端子连线；重复连接可取消",
+                               fill="#88a2d2", font=("Microsoft YaHei", 8))
+        self.scene.create_text(125, 292, text="主回路: 板+→电流表→电阻箱→板-   电压表并联电阻箱",
+                               fill="#6f8fc7", font=("Microsoft YaHei", 7))
+
+    def _hit_terminal(self, x, y):
+        hit = self.scene.find_overlapping(x - 3, y - 3, x + 3, y + 3)
+        term = None
+        for item in hit:
+            tags = self.scene.gettags(item)
+            for tag in tags:
+                if tag.startswith("term_"):
+                    term = tag.replace("term_", "")
+                    break
+            if term:
+                break
+        return term
+
+    def _on_scene_press(self, event):
+        term = self._hit_terminal(event.x, event.y)
+        if not term:
+            return
+        self.drag_start_term = term
+        x0, y0 = self.term_pos[term]
+        self.drag_line_id = self.scene.create_line(
+            x0, y0, event.x, event.y, fill="#ffb26b", width=3,
+            capstyle=tk.ROUND, smooth=True, splinesteps=20, tags="wire_preview"
+        )
+
+    def _on_scene_drag(self, event):
+        if self.drag_line_id is None or self.drag_start_term is None:
+            return
+        x0, y0 = self.term_pos[self.drag_start_term]
+        self.scene.coords(self.drag_line_id, x0, y0, event.x, event.y)
+
+    def _on_scene_release(self, event):
+        if self.drag_line_id is not None:
+            self.scene.delete(self.drag_line_id)
+        start = self.drag_start_term
+        end = self._hit_terminal(event.x, event.y)
+        self.drag_start_term = None
+        self.drag_line_id = None
+        if not start or not end or start == end:
+            return
+
+        a, b = start, end
+        pair = tuple(sorted((a, b)))
+
+        if pair in self.wires:
+            self.wires.remove(pair)
+        else:
+            # 简化规则：每个端子最多连接 2 根导线
+            if self._terminal_degree(a) >= 2 or self._terminal_degree(b) >= 2:
+                self._show_toast("端子连接数已达上限")
+                return
+            self.wires.add(pair)
+        self._redraw_wires()
+        self._update_wire_status()
+
+    def _terminal_degree(self, term_id):
+        d = 0
+        for x, y in self.wires:
+            if x == term_id or y == term_id:
+                d += 1
+        return d
+
+    def _redraw_wires(self):
+        self.scene.delete("wire")
+        for a, b in self.wires:
+            x1, y1 = self.term_pos[a]
+            x2, y2 = self.term_pos[b]
+            mx = (x1 + x2) / 2
+            # 先画外层阴影，再画内层高亮，模拟导线体积感
+            self.scene.create_line(
+                x1, y1, mx, y1, mx, y2, x2, y2,
+                fill="#6a2a14", width=5.2, smooth=True, splinesteps=24,
+                capstyle=tk.ROUND, joinstyle=tk.ROUND, tags="wire"
+            )
+            self.scene.create_line(
+                x1, y1, mx, y1, mx, y2, x2, y2,
+                fill="#ff7b3d", width=3.2, smooth=True, splinesteps=24,
+                capstyle=tk.ROUND, joinstyle=tk.ROUND, tags="wire"
+            )
+            # 端子插头点
+            self.scene.create_oval(x1 - 2.8, y1 - 2.8, x1 + 2.8, y1 + 2.8,
+                                   fill="#ffd38a", outline="#70451d", width=1, tags="wire")
+            self.scene.create_oval(x2 - 2.8, y2 - 2.8, x2 + 2.8, y2 + 2.8,
+                                   fill="#ffd38a", outline="#70451d", width=1, tags="wire")
+
+    def _update_wire_status(self):
+        required = {
+            tuple(sorted(("panel_p", "amm_p"))),
+            tuple(sorted(("amm_n", "res_p"))),
+            tuple(sorted(("res_n", "panel_n"))),
+            tuple(sorted(("vol_p", "res_p"))),
+            tuple(sorted(("vol_n", "res_n"))),
+        }
+        ok = required.issubset(self.wires)
+        self.connection_ok = ok
+        if ok:
+            self.wire_status.config(text="接线状态: 正确，可采集", fg="#66ff99")
+            self._try_auto_record_on_r_change()
+        else:
+            self.wire_status.config(text="接线状态: 未完成", fg="#ffcc66")
+
+    def _auto_wire_for_test(self):
+        """测试阶段：一键完成实验一标准接线。"""
+        self.wires = {
+            tuple(sorted(("panel_p", "amm_p"))),
+            tuple(sorted(("amm_n", "res_p"))),
+            tuple(sorted(("res_n", "panel_n"))),
+            tuple(sorted(("vol_p", "res_p"))),
+            tuple(sorted(("vol_n", "res_n"))),
+        }
+        self._redraw_wires()
+        self._update_wire_status()
+        self._show_toast("已自动完成测试接线")
 
     def _build_resistance_box(self, parent):
         tk.Label(parent, text="━━━ 负载电阻 ━━━", bg=PANEL_BG, fg=ACCENT,
@@ -300,6 +513,7 @@ class ExperimentOneTab:
         else:
             self.r_total_label.config(text="R = {:.1f} Ω".format(total))
         self.r_manual_var.set("")
+        self._try_auto_record_on_r_change()
 
     def _on_r_manual_enter(self, event):
         """手动输入电阻值"""
@@ -325,6 +539,7 @@ class ExperimentOneTab:
                 digit = int(round(remaining / mult))
             digit = max(0, min(9, digit))
             self.r_digits[i].config(text=str(digit))
+        self._try_auto_record_on_r_change()
 
     # ── 电池类型切换 ──
 
@@ -408,6 +623,12 @@ class ExperimentOneTab:
     # ── 记录数据（弹窗手动输入 U、I）──
 
     def _record_point(self):
+        self._record_point_impl(show_feedback=True)
+
+    def _record_point_impl(self, show_feedback=False):
+        if not self.connection_ok:
+            self._show_toast("请先按场景完成正确接线")
+            return
         R = self.r_value
         if R <= 0:
             self._show_toast("请先将电阻箱调到大于 0 的值")
@@ -418,12 +639,7 @@ class ExperimentOneTab:
                 self._show_toast("已存在 R={:g} Ω 的数据，不可重复记录！".format(R))
                 return
 
-        dialog = _ManualInputDialog(self.frame.winfo_toplevel(), R)
-        self.frame.winfo_toplevel().wait_window(dialog.top)
-        if dialog.result is None:
-            return
-        U_val, I_val = dialog.result
-
+        U_val, I_val = self._measure_ui_from_experimental_data(R)
         P_val = U_val * I_val  # mW
 
         point = {"R": R, "U": U_val, "I": I_val, "P": P_val}
@@ -434,6 +650,55 @@ class ExperimentOneTab:
             idx, "{:g}".format(R), "{:.3f}".format(U_val),
             "{:.3f}".format(I_val), "{:.3f}".format(P_val)
         ))
+        self.last_auto_record_r = R
+        if show_feedback:
+            self._show_toast("已记录 R={:g} Ω".format(R))
+
+    def _measure_ui_from_experimental_data(self, R):
+        """实验一采集：基于实测报告数据。优先精确点，否则按 R 线性插值。"""
+        data = get_experimental_data()["iv_data"]
+        Rs = [float(x) for x in data["R"]]
+        Us = [float(x) for x in data["U"]]
+        Is = [float(x) for x in data["I"]]
+
+        # 命中标准点：直接返回，保证如 7Ω -> 0.20V, 25.5mA
+        for r0, u0, i0 in zip(Rs, Us, Is):
+            if abs(R - r0) < 1e-9:
+                return u0, i0
+
+        # 线性插值（按电阻排序）
+        order = np.argsort(Rs)
+        Rs_s = [Rs[i] for i in order]
+        Us_s = [Us[i] for i in order]
+        Is_s = [Is[i] for i in order]
+
+        if R <= Rs_s[0]:
+            return Us_s[0], Is_s[0]
+        if R >= Rs_s[-1]:
+            return Us_s[-1], Is_s[-1]
+
+        for i in range(len(Rs_s) - 1):
+            r1, r2 = Rs_s[i], Rs_s[i + 1]
+            if r1 <= R <= r2:
+                t = (R - r1) / (r2 - r1) if r2 != r1 else 0.0
+                u = Us_s[i] + t * (Us_s[i + 1] - Us_s[i])
+                c = Is_s[i] + t * (Is_s[i + 1] - Is_s[i])
+                return float(u), float(c)
+
+        return Us_s[-1], Is_s[-1]
+
+    def _try_auto_record_on_r_change(self):
+        """接线正确后，调电阻自动采集并记录（同一 R 仅记录一次）。"""
+        if not self.connection_ok:
+            return
+        if self.r_value <= 0:
+            return
+        if self.last_auto_record_r is not None and abs(self.r_value - self.last_auto_record_r) < 1e-9:
+            return
+        for dp in self.data_points:
+            if abs(dp["R"] - self.r_value) < 1e-9:
+                return
+        self._record_point_impl(show_feedback=False)
 
     # ── 删除选中行 ──
 
@@ -549,6 +814,7 @@ class ExperimentOneTab:
 
     def _clear_data(self):
         self.data_points.clear()
+        self.last_auto_record_r = None
         for item_id in self.tree.get_children():
             self.tree.delete(item_id)
         self.ax1.clear()
@@ -738,7 +1004,7 @@ class ExperimentTab:
         self._build()
 
     def _build(self):
-        left = tk.Frame(self.frame, bg=PANEL_BG, width=280)
+        left = tk.Frame(self.frame, bg=PANEL_BG, width=360)
         left.pack(side=tk.LEFT, fill=tk.Y, padx=(0, 6))
         left.pack_propagate(False)
         right = tk.Frame(self.frame, bg=BG)
