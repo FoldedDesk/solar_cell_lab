@@ -26,12 +26,12 @@ from physics import (solve_iv_curve, solve_voc, solve_isc, find_mpp,
                      get_experimental_data)
 
 # ── 颜色主题 ──
-BG = "#1a1a2e"
-PANEL_BG = "#16213e"
-FG = "#e0e0e0"
-ACCENT = "#ff6b35"
-ACCENT2 = "#00ff88"
-GRID_COLOR = "#333"
+BG = "#d7dadd"
+PANEL_BG = "#d5e7f2"
+FG = "#1f2d3d"
+ACCENT = "#0086c8"
+ACCENT2 = "#1f9f59"
+GRID_COLOR = "#8da0b1"
 
 
 def solve_operating_point(params, R_ohm):
@@ -155,22 +155,54 @@ class ExperimentOneTab:
         self.data_points = []
         self.distance_cm = 30.0
         self.light_intensity = 242.0
+        self.panel_area_m2 = 0.01  # 受光面积(约 10cm x 10cm)
         self.wires = set()
         self.term_pos = {}
         self.term_degree = {}
         self.drag_start_term = None
         self.drag_line_id = None
+        self.drag_device_id = None
+        self.drag_device_last_xy = None
         self.connection_ok = False
         self.last_auto_record_r = None
+        self.lab_win = None
+        self.circuit_canvas = None
+        self.table_win = None
+        self.curve_win = None
+        self.tree = None
+        self.fig1 = None
+        self.fig2 = None
+        self.ax1 = None
+        self.ax2 = None
+        self.canvas1 = None
+        self.canvas2 = None
+        self.scene_size = (250, 320)
+        self.devices = {
+            "lamp": {"x": 72, "y": 86, "w": 104, "h": 52, "title": "大功率灯", "fill": "#3a2f1b"},
+            "panel": {"x": 404, "y": 72, "w": 122, "h": 78, "title": "太阳能板", "fill": "#17324a"},
+            "amm": {"x": 96, "y": 292, "w": 96, "h": 56, "title": "电流表", "fill": "#1f3f2b"},
+            "res": {"x": 478, "y": 304, "w": 104, "h": 56, "title": "电阻箱", "fill": "#40291f"},
+            "vol": {"x": 284, "y": 486, "w": 142, "h": 64, "title": "电压表", "fill": "#33295a"},
+        }
+        self.device_term_offsets = {
+            "panel": {"panel_p": (0, 22), "panel_n": (0, 48)},
+            "amm": {"amm_p": (0, 20), "amm_n": (0, 42)},
+            "res": {"res_p": (0, 20), "res_n": (0, 38)},
+            "vol": {"vol_p": (0, 6), "vol_n": (0, 28)},
+        }
         self._build()
 
     def _build(self):
-        left = tk.Frame(self.frame, bg=PANEL_BG, width=360)
+        left = tk.Frame(self.frame, bg=PANEL_BG, width=330)
         left.pack(side=tk.LEFT, fill=tk.Y, padx=(0, 6))
         left.pack_propagate(False)
-        right = tk.Frame(self.frame, bg=BG)
-        right.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
+        mid = tk.Frame(self.frame, bg=BG)
+        mid.pack(side=tk.LEFT, fill=tk.BOTH, expand=True, padx=(0, 6))
+        right = tk.Frame(self.frame, bg=PANEL_BG, width=520)
+        right.pack(side=tk.LEFT, fill=tk.Y)
+        right.pack_propagate(False)
         self._build_control(left)
+        self._build_wiring_scene(mid, large=True, show_button=True)
         self._build_right(right)
 
     # ── 左侧控制面板 ──
@@ -196,6 +228,23 @@ class ExperimentOneTab:
                  font=("Microsoft YaHei", 9)).pack(anchor="w")
         tk.Label(info, text="  光强 I: 242 W/m²", bg=PANEL_BG, fg=FG,
                  font=("Microsoft YaHei", 9)).pack(anchor="w")
+        tk.Label(info, text="  受光面积 A: 0.010 m²", bg=PANEL_BG, fg=FG,
+                 font=("Microsoft YaHei", 9)).pack(anchor="w")
+
+        core = tk.Frame(parent, bg="#1a2238", bd=1, relief=tk.SOLID)
+        core.pack(fill=tk.X, padx=10, pady=(4, 2))
+        tk.Label(core, text="核心原理：光功率 -> 电功率", bg="#24345f", fg="#dfe9ff",
+                 font=("Microsoft YaHei", 9, "bold")).pack(fill=tk.X, ipady=2)
+        self.core_pin_lbl = tk.Label(core, text="入射光功率 Pin = -- W", bg="#1a2238", fg="#9fc3ff",
+                                     font=("Consolas", 10, "bold"), anchor="w")
+        self.core_pin_lbl.pack(fill=tk.X, padx=6, pady=(4, 1))
+        self.core_pout_lbl = tk.Label(core, text="输出电功率 Pout = -- W", bg="#1a2238", fg="#8dffb7",
+                                      font=("Consolas", 10, "bold"), anchor="w")
+        self.core_pout_lbl.pack(fill=tk.X, padx=6, pady=1)
+        self.core_eta_lbl = tk.Label(core, text="转换效率 η = -- %", bg="#1a2238", fg="#ffd38a",
+                                     font=("Consolas", 10, "bold"), anchor="w")
+        self.core_eta_lbl.pack(fill=tk.X, padx=6, pady=(1, 5))
+        self._update_core_principle(0.0, 0.0)
 
         ttk.Separator(parent, orient="horizontal").pack(fill=tk.X, padx=10, pady=6)
 
@@ -207,10 +256,6 @@ class ExperimentOneTab:
 
         btn_frame = tk.Frame(parent, bg=PANEL_BG)
         btn_frame.pack(fill=tk.X, padx=10, pady=4)
-        tk.Button(btn_frame, text="绘图（≥10组）", bg="#2a6", fg="#fff",
-                  font=("Microsoft YaHei", 10), relief=tk.FLAT,
-                  activebackground="#3b7",
-                  command=self._draw_plot).pack(side=tk.LEFT, expand=True, fill=tk.X, padx=2)
 
         tk.Button(parent, text="数据分析", bg="#2266cc", fg="#fff",
                   font=("Microsoft YaHei", 11, "bold"),
@@ -219,34 +264,102 @@ class ExperimentOneTab:
 
         ttk.Separator(parent, orient="horizontal").pack(fill=tk.X, padx=10, pady=6)
 
-        # 接线场景（放在按钮区后，避免绘图按钮被挤出可视区域）
-        self._build_wiring_scene(parent)
+        tk.Button(parent, text="打开实验台（独立页面）", bg="#355c9a", fg="#fff",
+                  font=("Microsoft YaHei", 10, "bold"), relief=tk.FLAT,
+                  activebackground="#4a73b3",
+                  command=self._open_lab_window).pack(fill=tk.X, padx=10, pady=(2, 6), ipady=3)
 
-    def _build_wiring_scene(self, parent):
+    def _build_wiring_scene(self, parent, large=False, show_button=True):
         tk.Label(parent, text="━━━ 实验接线场景 ━━━", bg=PANEL_BG, fg=ACCENT,
                  font=("Microsoft YaHei", 10, "bold")).pack(anchor="w", padx=10, pady=(0, 2))
         self.wire_status = tk.Label(parent, text="接线状态: 未完成", bg=PANEL_BG, fg="#ffcc66",
                                     font=("Microsoft YaHei", 9))
         self.wire_status.pack(anchor="w", padx=10, pady=(0, 4))
 
-        self.scene = tk.Canvas(parent, width=250, height=320, bg="#101524",
+        cw, ch = (960, 620) if large else (250, 320)
+        self.scene_size = (cw, ch)
+        self.scene = tk.Canvas(parent, width=cw, height=ch, bg="#d7dadd",
                                highlightthickness=1, highlightbackground="#2d3c5a")
         self.scene.pack(padx=10, pady=2)
         self.scene.bind("<ButtonPress-1>", self._on_scene_press)
         self.scene.bind("<B1-Motion>", self._on_scene_drag)
         self.scene.bind("<ButtonRelease-1>", self._on_scene_release)
-        tk.Button(parent, text="测试自动接线", bg="#4455aa", fg="#fff",
-                  font=("Microsoft YaHei", 9, "bold"),
-                  activebackground="#5566bb", relief=tk.FLAT,
-                  command=self._auto_wire_for_test).pack(fill=tk.X, padx=10, pady=(2, 4), ipady=2)
+        if show_button:
+            tk.Button(parent, text="一键连线", bg="#4455aa", fg="#fff",
+                      font=("Microsoft YaHei", 9, "bold"),
+                      activebackground="#5566bb", relief=tk.FLAT,
+                      command=self._auto_wire_for_test).pack(fill=tk.X, padx=10, pady=(2, 4), ipady=2)
+        timer_bar = tk.Frame(parent, bg=PANEL_BG)
+        timer_bar.pack(fill=tk.X, padx=10, pady=(2, 6))
+        tk.Label(timer_bar, text="实验已经进行:", bg=PANEL_BG, fg="#ba2f2f",
+                 font=("Microsoft YaHei", 10, "bold")).pack(side=tk.LEFT)
+        self.timer_var = tk.StringVar(value="00:00:00")
+        tk.Label(timer_bar, textvariable=self.timer_var, bg="#101010", fg="#ff2a2a",
+                 font=("Consolas", 16, "bold"), padx=8, pady=2).pack(side=tk.LEFT, padx=8)
+        self._start_timer()
         self._draw_scene()
 
+    def _start_timer(self):
+        if not hasattr(self, "timer_var"):
+            return
+        if not hasattr(self, "_elapsed"):
+            self._elapsed = 0
+        h = self._elapsed // 3600
+        m = (self._elapsed % 3600) // 60
+        s = self._elapsed % 60
+        self.timer_var.set(f"{h:02d}:{m:02d}:{s:02d}")
+        self._elapsed += 1
+        self.frame.after(1000, self._start_timer)
+
+    def _open_lab_window(self):
+        if self.lab_win is not None and self.lab_win.winfo_exists():
+            self.lab_win.lift()
+            self.lab_win.focus_set()
+            return
+        win = tk.Toplevel(self.frame.winfo_toplevel())
+        win.title("实验一独立实验台")
+        win.configure(bg=BG)
+        win.geometry("1080x700")
+        win.resizable(True, True)
+        self.lab_win = win
+        self._layout_devices_for_large_scene()
+
+        body = tk.Frame(win, bg=BG)
+        body.pack(fill=tk.BOTH, expand=True, padx=10, pady=10)
+        left = tk.Frame(body, bg=PANEL_BG)
+        left.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
+        right = tk.Frame(body, bg=PANEL_BG, width=270)
+        right.pack(side=tk.LEFT, fill=tk.Y, padx=(8, 0))
+        right.pack_propagate(False)
+
+        self._build_wiring_scene(left, large=True, show_button=False)
+        tk.Button(right, text="一键连线", bg="#4455aa", fg="#fff",
+                  font=("Microsoft YaHei", 10, "bold"),
+                  activebackground="#5566bb", relief=tk.FLAT,
+                  command=self._auto_wire_for_test).pack(fill=tk.X, padx=10, pady=(12, 6), ipady=4)
+        tk.Label(right, text="右下角显示实时电路图", bg=PANEL_BG, fg="#a8bde6",
+                 font=("Microsoft YaHei", 10, "bold")).pack(anchor="w", padx=10, pady=(8, 4))
+        self.circuit_canvas = tk.Canvas(win, width=320, height=250, bg="#f7f4e8",
+                                        highlightthickness=1, highlightbackground="#2d3340")
+        self.circuit_canvas.place(relx=1.0, rely=1.0, x=-14, y=-14, anchor="se")
+        self.circuit_canvas.tkraise()
+        self._update_circuit_diagram()
+
+        def _on_close():
+            self.scene = None
+            self.wire_status = None
+            self.circuit_canvas = None
+            self.lab_win = None
+            win.destroy()
+
+        win.protocol("WM_DELETE_WINDOW", _on_close)
+
     def _add_device(self, x, y, w, h, title, fill):
-        self.scene.create_rectangle(x + 3, y + 3, x + w + 3, y + h + 3, fill="#0a0f1c", outline="", width=0)
-        self.scene.create_rectangle(x, y, x + w, y + h, fill=fill, outline="#5f79a8", width=1)
-        self.scene.create_rectangle(x + 1, y + 1, x + w - 1, y + 16, fill="#22365d", outline="", width=0)
+        self.scene.create_rectangle(x + 3, y + 3, x + w + 3, y + h + 3, fill="#0a0f1c", outline="", width=0, tags=("device",))
+        self.scene.create_rectangle(x, y, x + w, y + h, fill=fill, outline="#5f79a8", width=1, tags=("device",))
+        self.scene.create_rectangle(x + 1, y + 1, x + w - 1, y + 16, fill="#22365d", outline="", width=0, tags=("device",))
         self.scene.create_text(x + w / 2, y + 9, text=title, fill="#e8f1ff",
-                               font=("Microsoft YaHei", 8, "bold"))
+                               font=("Microsoft YaHei", 8, "bold"), tags=("device",))
 
     def _add_terminal(self, term_id, x, y, mark=""):
         r = 4
@@ -257,6 +370,8 @@ class ExperimentOneTab:
             self.scene.create_text(x, y - 10, text=mark, fill="#9bb2dd", font=("Consolas", 8, "bold"))
 
     def _draw_scene(self):
+        if self.scene is None or not self.scene.winfo_exists():
+            return
         self.scene.delete("all")
         self.term_pos.clear()
         self.term_degree = {
@@ -267,57 +382,64 @@ class ExperimentOneTab:
         }
         self.drag_start_term = None
         self.drag_line_id = None
-        self.connection_ok = False
-        self.wires.clear()
+        self.drag_device_id = None
+        self.drag_device_last_xy = None
 
-        # 桌面背景
-        self.scene.create_rectangle(6, 8, 244, 302, fill="#0f1b33", outline="#2f4f86", width=1)
-        self.scene.create_rectangle(12, 14, 238, 296, fill="#132548", outline="#1f3a6a", width=1)
-        self.scene.create_text(125, 24, text="实验一接线台", fill="#c8dcff",
+        cw, ch = self.scene_size
+        # 实验台与桌面
+        self.scene.create_rectangle(0, 0, cw, ch, fill="#d7dadd", outline="", width=0)
+        self.scene.create_rectangle(12, 16, cw - 12, ch - 68, fill="#cfd1d4", outline="#a4a9af", width=1)
+        self.scene.create_text(cw / 2, 12, text="太阳能电池实验台（实验一）", fill="#d4e4ff",
                                font=("Microsoft YaHei", 9, "bold"))
+        self.scene.create_rectangle(cw - 300, 24, cw - 20, 220, fill="#f6f6ef", outline="#b9bdc2", width=1)
+        self.scene.create_text(cw - 160, 38, text="实验提示区", fill="#3a4f62", font=("Microsoft YaHei", 10, "bold"))
+        self.scene.create_text(cw - 160, 72, text="按正确回路连接后记录数据", fill="#546a80", font=("Microsoft YaHei", 9))
 
-        # 器件布局（更接近真实接线台）
-        self._add_device(18, 34, 95, 46, "100W 灯", "#3a2f1b")
-        self._add_device(136, 34, 96, 62, "太阳能板", "#17324a")
-        self._add_device(18, 108, 84, 50, "电流表", "#1f3f2b")
-        self._add_device(146, 114, 86, 44, "电阻箱", "#40291f")
-        self._add_device(58, 196, 132, 56, "电压表", "#33295a")
+        # 器件布局（支持拖动）
+        for dev_id, d in self.devices.items():
+            self._add_device(d["x"], d["y"], d["w"], d["h"], d["title"], d["fill"])
+            self.scene.create_rectangle(d["x"], d["y"], d["x"] + d["w"], d["y"] + d["h"],
+                                        outline="", fill="", tags=("dev_hit", "dev_" + dev_id))
 
         # 光源与太阳能板细节
-        self.scene.create_oval(30, 47, 58, 75, fill="#ffd36a", outline="#ffe8a5", width=1)
-        self.scene.create_oval(36, 53, 52, 69, fill="#fff2c0", outline="", width=0)
-        self.scene.create_line(62, 52, 78, 52, fill="#ffcf66", width=1)
-        self.scene.create_line(62, 60, 80, 60, fill="#ffcf66", width=1)
-        self.scene.create_line(62, 68, 78, 68, fill="#ffcf66", width=1)
-        self.scene.create_rectangle(154, 52, 222, 86, fill="#204a68", outline="#4e87af", width=1)
-        for gx in (170, 186, 202):
-            self.scene.create_line(gx, 53, gx, 85, fill="#6fb4d8", width=1)
-        for gy in (63, 74):
-            self.scene.create_line(155, gy, 221, gy, fill="#6fb4d8", width=1)
+        lamp = self.devices["lamp"]
+        panel = self.devices["panel"]
+        self.scene.create_oval(lamp["x"] + 10, lamp["y"] + 10, lamp["x"] + 38, lamp["y"] + 38,
+                               fill="#ffd36a", outline="#ffe8a5", width=1)
+        self.scene.create_line(lamp["x"] + 42, lamp["y"] + 16, panel["x"] - 14, panel["y"] + 12, fill="#ffcf66", width=1)
+        self.scene.create_line(lamp["x"] + 42, lamp["y"] + 24, panel["x"] - 12, panel["y"] + 26, fill="#ffcf66", width=1)
+        self.scene.create_line(lamp["x"] + 42, lamp["y"] + 32, panel["x"] - 14, panel["y"] + 40, fill="#ffcf66", width=1)
+        self.scene.create_rectangle(panel["x"] + 18, panel["y"] + 22, panel["x"] + 86, panel["y"] + 56,
+                                    fill="#204a68", outline="#4e87af", width=1)
+        for gx in (panel["x"] + 34, panel["x"] + 50, panel["x"] + 66):
+            self.scene.create_line(gx, panel["y"] + 23, gx, panel["y"] + 55, fill="#6fb4d8", width=1)
 
         # 仪表/电阻箱细节
-        self.scene.create_oval(34, 118, 78, 152, fill="#0e1e18", outline="#6dd39b", width=1)
-        self.scene.create_line(56, 135, 70, 124, fill="#8df0bf", width=2)
-        self.scene.create_text(56, 136, text="A", fill="#8df0bf", font=("Consolas", 8, "bold"))
-        self.scene.create_rectangle(158, 124, 222, 144, fill="#0f131d", outline="#ff9f5f", width=1)
-        self.scene.create_text(190, 134, text="R BOX", fill="#ffb27f", font=("Consolas", 8, "bold"))
-        self.scene.create_oval(76, 210, 118, 244, fill="#1b1836", outline="#9c8cff", width=1)
-        self.scene.create_line(97, 227, 110, 216, fill="#b9abff", width=2)
-        self.scene.create_text(98, 228, text="V", fill="#b9abff", font=("Consolas", 8, "bold"))
+        amm = self.devices["amm"]
+        res = self.devices["res"]
+        vol = self.devices["vol"]
+        self.scene.create_oval(amm["x"] + 14, amm["y"] + 10, amm["x"] + 58, amm["y"] + 44,
+                               fill="#0e1e18", outline="#6dd39b", width=1)
+        self.scene.create_text(amm["x"] + 36, amm["y"] + 28, text="A", fill="#8df0bf", font=("Consolas", 9, "bold"))
+        self.scene.create_rectangle(res["x"] + 14, res["y"] + 14, res["x"] + 78, res["y"] + 34,
+                                    fill="#0f131d", outline="#ff9f5f", width=1)
+        self.scene.create_text(res["x"] + 46, res["y"] + 24, text="R BOX", fill="#ffb27f", font=("Consolas", 8, "bold"))
+        self.scene.create_oval(vol["x"] + 18, vol["y"] + 12, vol["x"] + 60, vol["y"] + 46,
+                               fill="#1b1836", outline="#9c8cff", width=1)
+        self.scene.create_text(vol["x"] + 39, vol["y"] + 29, text="V", fill="#b9abff", font=("Consolas", 9, "bold"))
 
-        self._add_terminal("panel_p", 136, 52, "+")
-        self._add_terminal("panel_n", 136, 78, "-")
-        self._add_terminal("amm_p", 18, 124, "+")
-        self._add_terminal("amm_n", 18, 146, "-")
-        self._add_terminal("res_p", 146, 128, "+")
-        self._add_terminal("res_n", 146, 146, "-")
-        self._add_terminal("vol_p", 58, 214, "+")
-        self._add_terminal("vol_n", 58, 236, "-")
+        for dev_id, m in self.device_term_offsets.items():
+            d = self.devices[dev_id]
+            for term_id, (ox, oy) in m.items():
+                sign = "+" if term_id.endswith("_p") else "-"
+                self._add_terminal(term_id, d["x"] + ox, d["y"] + oy, sign)
 
-        self.scene.create_text(125, 276, text="从端子拖拽到端子连线；重复连接可取消",
+        self.scene.create_text(cw / 2, ch - 28, text="拖动设备可重新布局；从端子拖拽到端子连线",
                                fill="#88a2d2", font=("Microsoft YaHei", 8))
-        self.scene.create_text(125, 292, text="主回路: 板+→电流表→电阻箱→板-   电压表并联电阻箱",
+        self.scene.create_text(cw / 2, ch - 12, text="主回路: 板+→电流表→电阻箱→板-   电压表并联电阻箱",
                                fill="#6f8fc7", font=("Microsoft YaHei", 7))
+        self._redraw_wires()
+        self._update_wire_status()
 
     def _hit_terminal(self, x, y):
         hit = self.scene.find_overlapping(x - 3, y - 3, x + 3, y + 3)
@@ -334,22 +456,45 @@ class ExperimentOneTab:
 
     def _on_scene_press(self, event):
         term = self._hit_terminal(event.x, event.y)
-        if not term:
+        if term:
+            self.drag_start_term = term
+            x0, y0 = self.term_pos[term]
+            self.drag_line_id = self.scene.create_line(
+                x0, y0, event.x, event.y, fill="#ffb26b", width=3,
+                capstyle=tk.ROUND, smooth=True, splinesteps=20, tags="wire_preview"
+            )
             return
-        self.drag_start_term = term
-        x0, y0 = self.term_pos[term]
-        self.drag_line_id = self.scene.create_line(
-            x0, y0, event.x, event.y, fill="#ffb26b", width=3,
-            capstyle=tk.ROUND, smooth=True, splinesteps=20, tags="wire_preview"
-        )
+        hit = self.scene.find_overlapping(event.x, event.y, event.x, event.y)
+        for item in hit:
+            for tag in self.scene.gettags(item):
+                if tag.startswith("dev_") and tag != "dev_hit":
+                    dev_id = tag.replace("dev_", "")
+                    if dev_id not in self.devices:
+                        continue
+                    self.drag_device_id = dev_id
+                    self.drag_device_last_xy = (event.x, event.y)
+                    return
 
     def _on_scene_drag(self, event):
+        if self.drag_device_id is not None and self.drag_device_last_xy is not None:
+            lx, ly = self.drag_device_last_xy
+            dx, dy = event.x - lx, event.y - ly
+            d = self.devices[self.drag_device_id]
+            d["x"] += dx
+            d["y"] += dy
+            self.drag_device_last_xy = (event.x, event.y)
+            self._draw_scene()
+            return
         if self.drag_line_id is None or self.drag_start_term is None:
             return
         x0, y0 = self.term_pos[self.drag_start_term]
         self.scene.coords(self.drag_line_id, x0, y0, event.x, event.y)
 
     def _on_scene_release(self, event):
+        if self.drag_device_id is not None:
+            self.drag_device_id = None
+            self.drag_device_last_xy = None
+            return
         if self.drag_line_id is not None:
             self.scene.delete(self.drag_line_id)
         start = self.drag_start_term
@@ -381,20 +526,21 @@ class ExperimentOneTab:
         return d
 
     def _redraw_wires(self):
+        if self.scene is None or not self.scene.winfo_exists():
+            return
         self.scene.delete("wire")
         for a, b in self.wires:
             x1, y1 = self.term_pos[a]
             x2, y2 = self.term_pos[b]
-            mx = (x1 + x2) / 2
-            # 先画外层阴影，再画内层高亮，模拟导线体积感
+            # 导线只表达“端子 A 连到端子 B”，不额外画转折点。
             self.scene.create_line(
-                x1, y1, mx, y1, mx, y2, x2, y2,
-                fill="#6a2a14", width=5.2, smooth=True, splinesteps=24,
+                x1, y1, x2, y2,
+                fill="#6a2a14", width=5.2,
                 capstyle=tk.ROUND, joinstyle=tk.ROUND, tags="wire"
             )
             self.scene.create_line(
-                x1, y1, mx, y1, mx, y2, x2, y2,
-                fill="#ff7b3d", width=3.2, smooth=True, splinesteps=24,
+                x1, y1, x2, y2,
+                fill="#ff7b3d", width=3.2,
                 capstyle=tk.ROUND, joinstyle=tk.ROUND, tags="wire"
             )
             # 端子插头点
@@ -413,11 +559,15 @@ class ExperimentOneTab:
         }
         ok = required.issubset(self.wires)
         self.connection_ok = ok
+        if self.wire_status is None or not self.wire_status.winfo_exists():
+            self._update_circuit_diagram()
+            return
         if ok:
             self.wire_status.config(text="接线状态: 正确，可采集", fg="#66ff99")
             self._try_auto_record_on_r_change()
         else:
             self.wire_status.config(text="接线状态: 未完成", fg="#ffcc66")
+        self._update_circuit_diagram()
 
     def _auto_wire_for_test(self):
         """测试阶段：一键完成实验一标准接线。"""
@@ -431,6 +581,74 @@ class ExperimentOneTab:
         self._redraw_wires()
         self._update_wire_status()
         self._show_toast("已自动完成测试接线")
+
+    def _layout_devices_for_large_scene(self):
+        self.devices["lamp"]["x"], self.devices["lamp"]["y"] = 70, 70
+        self.devices["panel"]["x"], self.devices["panel"]["y"] = 380, 60
+        self.devices["amm"]["x"], self.devices["amm"]["y"] = 70, 240
+        self.devices["res"]["x"], self.devices["res"]["y"] = 420, 250
+        self.devices["vol"]["x"], self.devices["vol"]["y"] = 220, 420
+
+    def _update_circuit_diagram(self):
+        if self.circuit_canvas is None or not self.circuit_canvas.winfo_exists():
+            return
+        c = self.circuit_canvas
+        c.delete("all")
+        c.create_rectangle(0, 0, 320, 250, fill="#f7f4e8", outline="#20242d", width=1)
+        c.create_text(160, 16, text="当前接线图", fill="#111",
+                      font=("Microsoft YaHei", 10, "bold"))
+
+        p = {
+            "panel_p": (96, 88), "panel_n": (96, 128),
+            "amm_p": (132, 88), "amm_n": (176, 88),
+            "res_p": (218, 88), "res_n": (286, 88),
+            "vol_p": (218, 174), "vol_n": (286, 174),
+        }
+
+        # 先画实际导线：连了哪两个端子，就画哪两个端子之间的直线。
+        for a, b in sorted(self.wires):
+            if a not in p or b not in p:
+                continue
+            x1, y1 = p[a]
+            x2, y2 = p[b]
+            c.create_line(x1, y1, x2, y2, fill="#111", width=2.4, capstyle=tk.ROUND)
+
+        # 电池板
+        c.create_rectangle(28, 62, 96, 154, outline="#111", width=2, fill="#fffdf2")
+        for gx in (45, 62, 79):
+            c.create_line(gx, 68, gx, 148, fill="#444", width=1)
+        for gy in (92, 124):
+            c.create_line(34, gy, 90, gy, fill="#444", width=1)
+        c.create_text(62, 174, text="电池板", fill="#111", font=("Microsoft YaHei", 9, "bold"))
+
+        # A 圈
+        c.create_oval(132, 66, 176, 110, outline="#111", width=2, fill="#fffdf2")
+        c.create_text(154, 88, text="A", fill="#111", font=("Consolas", 15, "bold"))
+
+        # 电阻箱
+        c.create_rectangle(218, 62, 286, 114, outline="#111", width=2, fill="#fffdf2")
+        c.create_text(252, 88, text="电阻箱", fill="#111", font=("Microsoft YaHei", 9, "bold"))
+
+        # V 圈
+        c.create_oval(230, 152, 274, 196, outline="#111", width=2, fill="#fffdf2")
+        c.create_text(252, 174, text="V", fill="#111", font=("Consolas", 15, "bold"))
+
+        for tid, (x, y) in p.items():
+            connected = any(tid in pair for pair in self.wires)
+            c.create_oval(x - 3, y - 3, x + 3, y + 3,
+                          fill="#111" if connected else "#fffdf2",
+                          outline="#111",
+                          width=1)
+        c.tkraise()
+
+    def _update_core_principle(self, U_val, I_mA):
+        """核心链路：Pin = E*A，Pout = U*I，eta = Pout/Pin。"""
+        pin = self.light_intensity * self.panel_area_m2
+        pout = U_val * I_mA / 1000.0
+        eta = (pout / pin * 100.0) if pin > 0 else 0.0
+        self.core_pin_lbl.config(text="入射光功率 Pin = {:.4f} W".format(pin))
+        self.core_pout_lbl.config(text="输出电功率 Pout = {:.4f} W".format(pout))
+        self.core_eta_lbl.config(text="转换效率 η = {:.2f} %".format(eta))
 
     def _build_resistance_box(self, parent):
         tk.Label(parent, text="━━━ 负载电阻 ━━━", bg=PANEL_BG, fg=ACCENT,
@@ -550,48 +768,124 @@ class ExperimentOneTab:
     # ── 右侧：两张图 + 数据表 ──
 
     def _build_right(self, parent):
-        chart_frame = tk.Frame(parent, bg=BG)
-        chart_frame.pack(fill=tk.BOTH, expand=True)
+        guide = tk.Frame(parent, bg="#f4edd1", bd=1, relief=tk.SOLID)
+        guide.pack(fill=tk.X, padx=8, pady=(8, 6))
+        tk.Label(guide, text="太阳能电池实验内容", bg="#f4edd1", fg="#222",
+                 font=("Microsoft YaHei", 11, "bold")).pack(anchor="w", padx=8, pady=(6, 2))
+        steps = [
+            "1. 连接实验电路并确认接线状态。",
+            "2. 调节电阻箱并记录端电压 U 与电流 I。",
+            "3. 至少采集 10 组数据后进行分析。",
+            "4. 使用“数据分析”得到最佳负载参数。"
+        ]
+        for s in steps:
+            tk.Label(guide, text=s, bg="#f4edd1", fg="#333",
+                     font=("Microsoft YaHei", 10), anchor="w").pack(fill=tk.X, padx=8, pady=1)
 
-        # 图1：伏安特性曲线 (I vs U)
-        self.fig1 = Figure(figsize=(4, 3.2), dpi=100, facecolor=BG)
-        self.ax1 = self.fig1.add_subplot(111)
-        self._style_ax(self.ax1, title="伏安特性曲线", xlabel="U (V)", ylabel="I (mA)")
-        self.canvas1 = FigureCanvasTkAgg(self.fig1, master=chart_frame)
-        self.canvas1.get_tk_widget().pack(side=tk.LEFT, fill=tk.BOTH, expand=True, padx=(0, 2))
+        btns = tk.Frame(parent, bg=PANEL_BG)
+        btns.pack(fill=tk.X, padx=8, pady=(6, 6))
+        tk.Button(btns, text="打开特性曲线窗口", bg="#2a6", fg="#fff",
+                  font=("Microsoft YaHei", 10, "bold"), relief=tk.FLAT,
+                  activebackground="#3b7",
+                  command=self._open_curve_window).pack(fill=tk.X, ipady=4)
 
-        # 图2：功率输出曲线 (P vs R)
-        self.fig2 = Figure(figsize=(4, 3.2), dpi=100, facecolor=BG)
-        self.ax2 = self.fig2.add_subplot(111)
-        self._style_ax(self.ax2, title="功率输出曲线", xlabel="R (Ω)", ylabel="P (mW)")
-        self.canvas2 = FigureCanvasTkAgg(self.fig2, master=chart_frame)
-        self.canvas2.get_tk_widget().pack(side=tk.LEFT, fill=tk.BOTH, expand=True, padx=(2, 0))
+        btn_row = tk.Frame(parent, bg=PANEL_BG)
+        btn_row.pack(fill=tk.X, padx=8, pady=(6, 8))
+        tk.Button(btn_row, text="打开实验数据表", bg="#2266cc", fg="#fff",
+                  font=("Microsoft YaHei", 10, "bold"), relief=tk.FLAT,
+                  activebackground="#3377dd",
+                  command=self._open_data_table_window).pack(fill=tk.X, ipady=4)
 
-        # 数据表
-        table_frame = tk.Frame(parent, bg=PANEL_BG, height=180)
-        table_frame.pack(fill=tk.X, padx=0, pady=(4, 0))
-        table_frame.pack_propagate(False)
+    def _open_data_table_window(self):
+        if self.table_win is not None and self.table_win.winfo_exists():
+            self.table_win.lift()
+            self.table_win.focus_set()
+            return
+        win = tk.Toplevel(self.frame.winfo_toplevel())
+        win.title("实验一数据表")
+        win.configure(bg=BG)
+        win.geometry("620x360")
+        win.resizable(True, True)
+        self.table_win = win
 
-        hdr = tk.Frame(table_frame, bg=PANEL_BG)
-        hdr.pack(fill=tk.X, padx=8, pady=(4, 2))
-        tk.Label(hdr, text="实验数据记录（手动输入）", bg=PANEL_BG, fg=ACCENT,
-                 font=("Microsoft YaHei", 10, "bold")).pack(side=tk.LEFT)
+        hdr = tk.Frame(win, bg=PANEL_BG)
+        hdr.pack(fill=tk.X, padx=8, pady=(8, 4))
+        tk.Label(hdr, text="实验数据记录", bg=PANEL_BG, fg=ACCENT,
+                 font=("Microsoft YaHei", 11, "bold")).pack(side=tk.LEFT)
         tk.Button(hdr, text="删除选中行", bg="#644", fg="#fff",
                   font=("Microsoft YaHei", 9), relief=tk.FLAT,
                   activebackground="#855",
                   command=self._delete_selected).pack(side=tk.RIGHT, padx=4)
 
+        table_frame = tk.Frame(win, bg=PANEL_BG)
+        table_frame.pack(fill=tk.BOTH, expand=True, padx=8, pady=(0, 8))
         cols = ("序号", "R (Ω)", "U (V)", "I (mA)", "P (mW)")
-        self.tree = ttk.Treeview(table_frame, columns=cols, show="headings", height=6)
+        self.tree = ttk.Treeview(table_frame, columns=cols, show="headings")
         for c in cols:
             self.tree.heading(c, text=c)
-            w = 50 if c == "序号" else 90
+            w = 60 if c == "序号" else 115
             self.tree.column(c, width=w, anchor="center")
         vsb = ttk.Scrollbar(table_frame, orient="vertical", command=self.tree.yview)
         self.tree.configure(yscrollcommand=vsb.set)
-        self.tree.pack(side=tk.LEFT, fill=tk.BOTH, expand=True, padx=(8, 0))
-        vsb.pack(side=tk.RIGHT, fill=tk.Y, padx=(0, 8))
+        self.tree.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
+        vsb.pack(side=tk.RIGHT, fill=tk.Y)
         self.tree.bind("<Double-1>", self._on_table_double_click)
+        self._refresh_table_view()
+
+        def _on_close():
+            self.tree = None
+            self.table_win = None
+            win.destroy()
+
+        win.protocol("WM_DELETE_WINDOW", _on_close)
+
+    def _open_curve_window(self):
+        if self.curve_win is not None and self.curve_win.winfo_exists():
+            self.curve_win.lift()
+            self.curve_win.focus_set()
+            return
+        win = tk.Toplevel(self.frame.winfo_toplevel())
+        win.title("实验一特性曲线")
+        win.configure(bg=BG)
+        win.geometry("980x460")
+        win.resizable(True, True)
+        self.curve_win = win
+
+        chart_frame = tk.Frame(win, bg=BG)
+        chart_frame.pack(fill=tk.BOTH, expand=True, padx=8, pady=8)
+        self.fig1 = Figure(figsize=(4.5, 3.2), dpi=100, facecolor=BG)
+        self.ax1 = self.fig1.add_subplot(111)
+        self._style_ax(self.ax1, title="伏安特性曲线", xlabel="U (V)", ylabel="I (mA)")
+        self.canvas1 = FigureCanvasTkAgg(self.fig1, master=chart_frame)
+        self.canvas1.get_tk_widget().pack(side=tk.LEFT, fill=tk.BOTH, expand=True, padx=(0, 4))
+
+        self.fig2 = Figure(figsize=(4.5, 3.2), dpi=100, facecolor=BG)
+        self.ax2 = self.fig2.add_subplot(111)
+        self._style_ax(self.ax2, title="功率输出曲线", xlabel="R (Ω)", ylabel="P (mW)")
+        self.canvas2 = FigureCanvasTkAgg(self.fig2, master=chart_frame)
+        self.canvas2.get_tk_widget().pack(side=tk.LEFT, fill=tk.BOTH, expand=True, padx=(4, 0))
+        if len(self.data_points) >= 10:
+            self._draw_plot()
+
+        def _on_close():
+            self.curve_win = None
+            self.fig1 = self.fig2 = None
+            self.ax1 = self.ax2 = None
+            self.canvas1 = self.canvas2 = None
+            win.destroy()
+
+        win.protocol("WM_DELETE_WINDOW", _on_close)
+
+    def _refresh_table_view(self):
+        if self.tree is None or not self.tree.winfo_exists():
+            return
+        for item_id in self.tree.get_children():
+            self.tree.delete(item_id)
+        for idx, dp in enumerate(self.data_points, start=1):
+            self.tree.insert("", "end", values=(
+                idx, "{:g}".format(dp["R"]), "{:.3f}".format(dp["U"]),
+                "{:.3f}".format(dp["I"]), "{:.3f}".format(dp["P"])
+            ))
 
     def _style_ax(self, ax, title="", xlabel="", ylabel=""):
         ax.set_facecolor("#0f0f23")
@@ -644,12 +938,14 @@ class ExperimentOneTab:
 
         point = {"R": R, "U": U_val, "I": I_val, "P": P_val}
         self.data_points.append(point)
+        self._update_core_principle(U_val, I_val)
 
         idx = len(self.data_points)
-        self.tree.insert("", "end", values=(
-            idx, "{:g}".format(R), "{:.3f}".format(U_val),
-            "{:.3f}".format(I_val), "{:.3f}".format(P_val)
-        ))
+        if self.tree is not None and self.tree.winfo_exists():
+            self.tree.insert("", "end", values=(
+                idx, "{:g}".format(R), "{:.3f}".format(U_val),
+                "{:.3f}".format(I_val), "{:.3f}".format(P_val)
+            ))
         self.last_auto_record_r = R
         if show_feedback:
             self._show_toast("已记录 R={:g} Ω".format(R))
@@ -703,6 +999,9 @@ class ExperimentOneTab:
     # ── 删除选中行 ──
 
     def _delete_selected(self):
+        if self.tree is None or not self.tree.winfo_exists():
+            self._show_toast("请先打开实验数据表")
+            return
         sel = self.tree.selection()
         if not sel:
             self._show_toast("请先在表格中选中要删除的行")
@@ -716,12 +1015,16 @@ class ExperimentOneTab:
         self._reindex_table()
 
     def _reindex_table(self):
+        if self.tree is None or not self.tree.winfo_exists():
+            return
         for i, item_id in enumerate(self.tree.get_children()):
             vals = list(self.tree.item(item_id, "values"))
             vals[0] = i + 1
             self.tree.item(item_id, values=vals)
 
     def _on_table_double_click(self, event):
+        if self.tree is None or not self.tree.winfo_exists():
+            return
         item_id = self.tree.identify_row(event.y)
         col_id = self.tree.identify_column(event.x)
         if not item_id or not col_id:
@@ -815,14 +1118,15 @@ class ExperimentOneTab:
     def _clear_data(self):
         self.data_points.clear()
         self.last_auto_record_r = None
-        for item_id in self.tree.get_children():
-            self.tree.delete(item_id)
-        self.ax1.clear()
-        self._style_ax(self.ax1, title="伏安特性曲线", xlabel="U (V)", ylabel="I (mA)")
-        self.canvas1.draw_idle()
-        self.ax2.clear()
-        self._style_ax(self.ax2, title="功率输出曲线", xlabel="R (Ω)", ylabel="P (mW)")
-        self.canvas2.draw_idle()
+        self._refresh_table_view()
+        if self.ax1 is not None and self.canvas1 is not None:
+            self.ax1.clear()
+            self._style_ax(self.ax1, title="伏安特性曲线", xlabel="U (V)", ylabel="I (mA)")
+            self.canvas1.draw_idle()
+        if self.ax2 is not None and self.canvas2 is not None:
+            self.ax2.clear()
+            self._style_ax(self.ax2, title="功率输出曲线", xlabel="R (Ω)", ylabel="P (mW)")
+            self.canvas2.draw_idle()
 
     def _load_standard_data(self):
         data = get_experimental_data()["iv_data"]
@@ -833,10 +1137,11 @@ class ExperimentOneTab:
             point = {"R": float(r), "U": float(u), "I": float(i), "P": float(p)}
             self.data_points.append(point)
             idx = len(self.data_points)
-            self.tree.insert("", "end", values=(
-                idx, "{:g}".format(r), "{:.3f}".format(u),
-                "{:.3f}".format(i), "{:.3f}".format(p)
-            ))
+            if self.tree is not None and self.tree.winfo_exists():
+                self.tree.insert("", "end", values=(
+                    idx, "{:g}".format(r), "{:.3f}".format(u),
+                    "{:.3f}".format(i), "{:.3f}".format(p)
+                ))
         ok, msg = self._validate_exp1_data()
         if not ok:
             self._show_toast("标准数据校验失败: " + msg)
@@ -861,6 +1166,10 @@ class ExperimentOneTab:
     def _draw_plot(self):
         if len(self.data_points) < 10:
             self._show_toast("需要至少 10 组数据才能绘图！当前 {} 组".format(len(self.data_points)))
+            return
+        if self.curve_win is None or not self.curve_win.winfo_exists():
+            self._open_curve_window()
+        if self.ax1 is None or self.ax2 is None or self.canvas1 is None or self.canvas2 is None:
             return
 
         Us = [d["U"] for d in self.data_points]
@@ -990,7 +1299,7 @@ class ExperimentOneTab:
 # ═══════════════════════════════════════════════
 
 class ExperimentTab:
-    """实验二/三：自动计算 U、I、P。"""
+    """实验二/三：按指导书流程自动计算数据。"""
 
     def __init__(self, parent_frame, title, experiment_type="distance"):
         self.frame = parent_frame
@@ -999,8 +1308,10 @@ class ExperimentTab:
         self.params = {k: v for k, v in DEFAULT_PARAMS["single"].items()}
         self.data_points = []
         self.distance_cm = 30.0
-        self.light_intensity = 1000.0
+        self.lamp_power_w = 100.0
+        self.light_intensity = calc_light_intensity(self.distance_cm)
         self.fixed_R = 100.0
+        self.ax2 = None
         self._build()
 
     def _build(self):
@@ -1013,7 +1324,6 @@ class ExperimentTab:
         self._build_right(right)
 
     def _build_control(self, parent):
-        # 电池类型（仅单晶硅，无选择）
         tk.Label(parent, text="电池类型", bg=PANEL_BG, fg=FG,
                  font=("Microsoft YaHei", 10, "bold")).pack(anchor="w", padx=10, pady=(10, 2))
         tf = tk.Frame(parent, bg=PANEL_BG)
@@ -1030,21 +1340,24 @@ class ExperimentTab:
 
         ttk.Separator(parent, orient="horizontal").pack(fill=tk.X, padx=10, pady=6)
 
-        # 实时读数
         tk.Label(parent, text="━━━ 实时读数 ━━━", bg=PANEL_BG, fg="#888",
                  font=("Consolas", 9)).pack(pady=(4, 6))
-        self.reading_v = tk.Label(parent, text="U = 0.000 V", bg="#0a0a0a",
+        v_text = "Voc = 0.000 V" if self.experiment_type == "distance" else "U = 0.000 V"
+        i_text = "Isc = 0.000 mA" if self.experiment_type == "distance" else "I = 0.000 mA"
+        p_text = "E = 0 W/m²" if self.experiment_type == "distance" else "P = 0.000 mW"
+        self.reading_v = tk.Label(parent, text=v_text, bg="#0a0a0a",
                                   fg="#00ff88", font=("Consolas", 16, "bold"),
                                   relief=tk.SUNKEN, bd=2, padx=8, pady=4)
         self.reading_v.pack(fill=tk.X, padx=10, pady=2)
-        self.reading_i = tk.Label(parent, text="I = 0.000 mA", bg="#0a0a0a",
+        self.reading_i = tk.Label(parent, text=i_text, bg="#0a0a0a",
                                   fg="#00ff88", font=("Consolas", 16, "bold"),
                                   relief=tk.SUNKEN, bd=2, padx=8, pady=4)
         self.reading_i.pack(fill=tk.X, padx=10, pady=2)
-        self.reading_p = tk.Label(parent, text="P = 0.000 mW", bg="#0a0a0a",
+        self.reading_p = tk.Label(parent, text=p_text, bg="#0a0a0a",
                                   fg="#ffcc00", font=("Consolas", 14, "bold"),
                                   relief=tk.SUNKEN, bd=2, padx=8, pady=4)
         self.reading_p.pack(fill=tk.X, padx=10, pady=2)
+        self._update_reading()
 
         ttk.Separator(parent, orient="horizontal").pack(fill=tk.X, padx=10, pady=6)
 
@@ -1083,7 +1396,7 @@ class ExperimentTab:
                  font=("Microsoft YaHei", 9)).pack(anchor="w")
         tk.Label(info, text="  光源功率: 100 W", bg=PANEL_BG, fg=FG,
                  font=("Microsoft YaHei", 9)).pack(anchor="w")
-        tk.Label(info, text="  负载电阻: 100 Ω", bg=PANEL_BG, fg=FG,
+        tk.Label(info, text="  测量: 开路电压 Voc / 短路电流 Isc", bg=PANEL_BG, fg=FG,
                  font=("Microsoft YaHei", 9)).pack(anchor="w")
 
     def _build_light_control(self, parent):
@@ -1099,7 +1412,7 @@ class ExperimentTab:
         self.power_label = tk.Label(parent, text="P_lamp = 100 W", bg=PANEL_BG, fg=FG,
                                     font=("Consolas", 12, "bold"))
         self.power_label.pack(pady=4)
-        self.intensity_label = tk.Label(parent, text="E = 1000 W/m²", bg=PANEL_BG,
+        self.intensity_label = tk.Label(parent, text="E = {:.0f} W/m²".format(self.light_intensity), bg=PANEL_BG,
                                         fg="#aaa", font=("Consolas", 10))
         self.intensity_label.pack()
         info = tk.Frame(parent, bg=PANEL_BG)
@@ -1133,7 +1446,10 @@ class ExperimentTab:
                   activebackground="#855",
                   command=self._delete_selected).pack(side=tk.RIGHT, padx=4)
 
-        cols = ("序号", "自变量", "U (V)", "I (mA)", "P (mW)")
+        if self.experiment_type == "distance":
+            cols = ("序号", "d (cm)", "E (W/m²)", "Voc (V)", "Isc (mA)")
+        else:
+            cols = ("序号", "E (W/m²)", "U (V)", "I (mA)", "P (mW)")
         self.tree = ttk.Treeview(table_frame, columns=cols, show="headings", height=6)
         for c in cols:
             self.tree.heading(c, text=c)
@@ -1155,19 +1471,20 @@ class ExperimentTab:
         ax.grid(True, alpha=0.2, color=GRID_COLOR)
 
     def _on_type_change(self):
-        t = self.cell_type_var.get()
-        self.params = {k: v for k, v in DEFAULT_PARAMS[t].items()}
+        self.params = {k: v for k, v in DEFAULT_PARAMS["single"].items()}
         self._update_reading()
 
     def _on_distance_change(self, val):
         d = float(val)
         self.distance_cm = d
+        self.light_intensity = calc_light_intensity(d) * (self.lamp_power_w / 100.0)
         self.dist_label.config(text="d = {:.0f} cm".format(d))
         self._update_reading()
 
     def _on_power_change(self, val):
         p = float(val)
-        self.light_intensity = calc_light_intensity(self.distance_cm)
+        self.lamp_power_w = p
+        self.light_intensity = calc_light_intensity(self.distance_cm) * (p / 100.0)
         self.power_label.config(text="P_lamp = {:.0f} W".format(p))
         self.intensity_label.config(text="E = {:.0f} W/m²".format(self.light_intensity))
         self._update_reading()
@@ -1179,15 +1496,19 @@ class ExperimentTab:
         return p
 
     def _update_reading(self):
-        R = self.fixed_R
-        if R <= 0:
-            return
         try:
             p = self._get_current_params()
-            V, I, P = solve_operating_point(p, R)
-            self.reading_v.config(text="U = {:.3f} V".format(V))
-            self.reading_i.config(text="I = {:.3f} mA".format(I * 1000))
-            self.reading_p.config(text="P = {:.3f} mW".format(P * 1000))
+            if self.experiment_type == "distance":
+                voc = solve_voc(p)
+                isc = solve_isc(p)
+                self.reading_v.config(text="Voc = {:.3f} V".format(voc))
+                self.reading_i.config(text="Isc = {:.3f} mA".format(isc * 1000))
+                self.reading_p.config(text="E = {:.0f} W/m²".format(self.light_intensity))
+            else:
+                V, I, P = solve_operating_point(p, self.fixed_R)
+                self.reading_v.config(text="U = {:.3f} V".format(V))
+                self.reading_i.config(text="I = {:.3f} mA".format(I * 1000))
+                self.reading_p.config(text="P = {:.3f} mW".format(P * 1000))
         except Exception:
             self.reading_v.config(text="U = --- V")
             self.reading_i.config(text="I = --- mA")
@@ -1208,19 +1529,35 @@ class ExperimentTab:
 
         try:
             p = self._get_current_params()
-            V, I, P = solve_operating_point(p, self.fixed_R)
+            if self.experiment_type == "distance":
+                voc = solve_voc(p)
+                isc = solve_isc(p)
+                point = {
+                    "var_name": var_name, "var_val": var_val,
+                    "E": self.light_intensity, "Voc": voc, "Isc": isc
+                }
+            else:
+                V, I, P = solve_operating_point(p, self.fixed_R)
+                point = {
+                    "var_name": var_name, "var_val": var_val,
+                    "E": self.light_intensity, "V": V, "I": I, "P": P
+                }
         except Exception:
             return
 
-        point = {"var_name": var_name, "var_val": var_val, "V": V, "I": I, "P": P}
         self.data_points.append(point)
 
         idx = len(self.data_points)
-        var_str = "{:.1f}".format(var_val)
-        self.tree.insert("", "end", values=(
-            idx, var_str, "{:.3f}".format(V),
-            "{:.3f}".format(I * 1000), "{:.3f}".format(P * 1000)
-        ))
+        if self.experiment_type == "distance":
+            self.tree.insert("", "end", values=(
+                idx, "{:.0f}".format(var_val), "{:.0f}".format(self.light_intensity),
+                "{:.3f}".format(point["Voc"]), "{:.3f}".format(point["Isc"] * 1000)
+            ))
+        else:
+            self.tree.insert("", "end", values=(
+                idx, "{:.0f}".format(var_val), "{:.3f}".format(point["V"]),
+                "{:.3f}".format(point["I"] * 1000), "{:.3f}".format(point["P"] * 1000)
+            ))
         self._draw_plot()
 
     def _delete_selected(self):
@@ -1258,52 +1595,70 @@ class ExperimentTab:
         self.data_points.clear()
         for item_id in self.tree.get_children():
             self.tree.delete(item_id)
+        if self.ax2 is not None:
+            self.ax2.remove()
+            self.ax2 = None
         self.ax.clear()
         self._style_ax(self.ax)
         self.canvas.draw_idle()
 
     def _draw_plot(self):
         if not self.data_points:
+            if self.ax2 is not None:
+                self.ax2.remove()
+                self.ax2 = None
+            self.ax.clear()
+            self._style_ax(self.ax)
+            self.canvas.draw_idle()
             return
+        if self.ax2 is not None:
+            self.ax2.remove()
+            self.ax2 = None
         self.ax.clear()
         var_name = self.data_points[0]["var_name"]
-        var_vals = [d["var_val"] for d in self.data_points]
-        Is = [d["I"] * 1000 for d in self.data_points]
-        Ps = [d["P"] * 1000 for d in self.data_points]
+        if self.experiment_type == "distance":
+            pts = sorted(self.data_points, key=lambda d: d["E"])
+            xs = [d["E"] for d in pts]
+            voc = [d["Voc"] for d in pts]
+            isc = [d["Isc"] * 1000 for d in pts]
 
-        order = np.argsort(var_vals)
-        var_vals = [var_vals[i] for i in order]
-        Is = [Is[i] for i in order]
-        Ps = [Ps[i] for i in order]
+            self.ax.set_xlabel("E (W/m²)", fontproperties=plt_font, color=FG, fontsize=10)
+            self.ax.set_ylabel("Voc (V)", fontproperties=plt_font, color=ACCENT, fontsize=10)
+            self.ax.tick_params(axis="y", labelcolor=ACCENT)
+            self.ax.plot(xs, voc, "o-", color=ACCENT, linewidth=2,
+                         markersize=6, label="Voc (V)")
 
-        self.ax.plot(var_vals, Is, "o-", color=ACCENT, linewidth=2,
-                     markersize=6, label="I (mA)")
-        self.ax.set_xlabel(var_name, fontproperties=plt_font, color=FG, fontsize=10)
-        self.ax.set_ylabel("I (mA)", fontproperties=plt_font, color=ACCENT, fontsize=10)
-        self.ax.tick_params(axis="y", labelcolor=ACCENT)
+            ax2 = self.ax.twinx()
+            self.ax2 = ax2
+            ax2.plot(xs, isc, "s--", color=ACCENT2, linewidth=2,
+                     markersize=6, label="Isc (mA)")
+            ax2.set_ylabel("Isc (mA)", fontproperties=plt_font, color=ACCENT2, fontsize=10, labelpad=10)
+            ax2.tick_params(axis="y", labelcolor=ACCENT2)
+            for spine in ax2.spines.values():
+                spine.set_color(GRID_COLOR)
+            if isc:
+                ax2.set_ylim(0, max(isc) * 1.25)
+        else:
+            pts = sorted(self.data_points, key=lambda d: d["var_val"])
+            xs = [d["var_val"] for d in pts]
+            current = [d["I"] * 1000 for d in pts]
+            power = [d["P"] * 1000 for d in pts]
 
-        ax2 = self.ax.twinx()
-        ax2.plot(var_vals, Ps, "s--", color=ACCENT2, linewidth=2,
-                 markersize=6, label="P (mW)")
-        ax2.set_ylabel("P (mW)", fontproperties=plt_font, color=ACCENT2, fontsize=10, labelpad=10)
-        ax2.tick_params(axis="y", labelcolor=ACCENT2)
-        for spine in ax2.spines.values():
-            spine.set_color(GRID_COLOR)
-        p_max = max(Ps) if Ps else 1
-        ax2.set_ylim(0, p_max * 1.25)
+            self.ax.set_xlabel(var_name, fontproperties=plt_font, color=FG, fontsize=10)
+            self.ax.set_ylabel("I (mA)", fontproperties=plt_font, color=ACCENT, fontsize=10)
+            self.ax.tick_params(axis="y", labelcolor=ACCENT)
+            self.ax.plot(xs, current, "o-", color=ACCENT, linewidth=2,
+                         markersize=6, label="I (mA)")
 
-        max_idx = np.argmax(Ps)
-        self.ax.plot(var_vals[max_idx], Is[max_idx], "v", color="#ff4444",
-                     markersize=12, zorder=5)
-        ax2.plot(var_vals[max_idx], Ps[max_idx], "v", color="#ff4444",
-                 markersize=12, zorder=5)
-        mpp_text = "MPP\n{:.1f}, {:.1f} mW".format(var_vals[max_idx], Ps[max_idx])
-        self.ax.annotate(mpp_text,
-                         xy=(var_vals[max_idx], Is[max_idx]),
-                         xytext=(20, 20), textcoords="offset points",
-                         color="#ff4444", fontsize=9, fontproperties=plt_font,
-                         arrowprops=dict(arrowstyle="->", color="#ff4444"),
-                         bbox=dict(boxstyle="round,pad=0.3", fc="#1a1a2e", ec="#ff4444", alpha=0.8))
+            ax2 = self.ax.twinx()
+            self.ax2 = ax2
+            ax2.plot(xs, power, "s--", color=ACCENT2, linewidth=2,
+                     markersize=6, label="P (mW)")
+            ax2.set_ylabel("P (mW)", fontproperties=plt_font, color=ACCENT2, fontsize=10, labelpad=10)
+            ax2.tick_params(axis="y", labelcolor=ACCENT2)
+            for spine in ax2.spines.values():
+                spine.set_color(GRID_COLOR)
+            ax2.set_ylim(0, max(max(power), 1) * 1.25)
 
         self.ax.set_title("实验数据 - " + self.title, fontproperties=plt_font,
                           color=FG, fontsize=12, pad=8)
@@ -1324,37 +1679,26 @@ class ExperimentTab:
 class SolarCellApp:
     def __init__(self, root):
         self.root = root
-        self.root.title("太阳能电池伏安特性虚拟实验台")
-        self.root.geometry("1250x800")
+        self.root.title("太阳能电池特性测量")
+        self.root.geometry("1820x900")
         self.root.configure(bg=BG)
-        self.root.minsize(1050, 680)
+        self.root.minsize(1560, 760)
         self._build_ui()
 
     def _build_ui(self):
-        header = tk.Frame(self.root, bg=ACCENT, height=44)
+        header = tk.Frame(self.root, bg=ACCENT, height=36)
         header.pack(fill=tk.X)
         header.pack_propagate(False)
-        tk.Label(header, text="太阳能电池伏安特性虚拟实验台",
+        tk.Label(header, text="太阳能电池的特性测量",
                  bg=ACCENT, fg="#fff",
-                 font=("Microsoft YaHei", 14, "bold")).pack(side=tk.LEFT, padx=15)
-        tk.Label(header, text="单二极管等效电路模型 / 半自动实验模式",
-                 bg=ACCENT, fg="#ffe0cc",
-                 font=("Microsoft YaHei", 10)).pack(side=tk.LEFT, padx=10)
+                 font=("Microsoft YaHei", 13, "bold")).pack(side=tk.LEFT, padx=12)
+        tk.Label(header, text="工具箱  帮助",
+                 bg=ACCENT, fg="#d6effa",
+                 font=("Microsoft YaHei", 10, "bold")).pack(side=tk.RIGHT, padx=12)
 
-        self.notebook = ttk.Notebook(self.root)
-        self.notebook.pack(fill=tk.BOTH, expand=True, padx=8, pady=8)
-
-        tab1 = tk.Frame(self.notebook, bg=BG)
-        self.notebook.add(tab1, text=" 实验一：改变电阻 ")
-        self.exp1 = ExperimentOneTab(tab1)
-
-        tab2 = tk.Frame(self.notebook, bg=BG)
-        self.notebook.add(tab2, text=" 实验二：改变距离 ")
-        self.exp2 = ExperimentTab(tab2, "改变光源距离", experiment_type="distance")
-
-        tab3 = tk.Frame(self.notebook, bg=BG)
-        self.notebook.add(tab3, text=" 实验三：改变光强 ")
-        self.exp3 = ExperimentTab(tab3, "改变光源功率", experiment_type="light")
+        main = tk.Frame(self.root, bg=BG)
+        main.pack(fill=tk.BOTH, expand=True, padx=8, pady=8)
+        self.exp1 = ExperimentOneTab(main)
 
 
 def run():
