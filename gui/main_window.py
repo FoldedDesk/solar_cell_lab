@@ -1,7 +1,7 @@
 """
 主窗口 — 虚拟实验台
 实验一：固定光源+距离(30cm)，改变电阻 → 用户手动填 U, I
-实验二：固定光源+电阻，改变距离 → 记录 d, U, I, P
+实验二：固定光源+电阻，改变距离 → 记录 d, I, Voc, Isc
 实验三：固定距离+电阻，改变光强 → 记录 E, U, I, P
 """
 
@@ -148,13 +148,15 @@ class _ManualInputDialog:
 class ExperimentOneTab:
     """实验一：固定光源+距离，改变电阻，用户手动输入 U、I。"""
 
-    def __init__(self, parent_frame):
+    def __init__(self, parent_frame, experiment_name="实验一"):
         self.frame = parent_frame
+        self.experiment_name = experiment_name
+        self.is_distance_experiment = (self.experiment_name == "实验二")
         self.title = "改变负载电阻"
         self.params = {k: v for k, v in DEFAULT_PARAMS["single"].items()}
         self.data_points = []
         self.distance_cm = 30.0
-        self.light_intensity = 242.0
+        self.light_intensity = 105.1 if self.is_distance_experiment else 242.0
         self.panel_area_m2 = 0.01  # 受光面积(约 10cm x 10cm)
         self.wires = set()
         self.term_pos = {}
@@ -165,6 +167,15 @@ class ExperimentOneTab:
         self.drag_device_last_xy = None
         self.connection_ok = False
         self.last_auto_record_r = None
+        self.r_value = 82.0 if self.is_distance_experiment else 0.0
+        self.distance_resistance_confirmed = False
+        self.exp2_measure_mode = "isc"  # 实验二：isc(短路电流) / voc(开路电压)
+        self.exp2_partial_points = {}
+        self.last_auto_record_distance = None
+        self.distance_win = None
+        self.distance_scale = None
+        self.distance_preview_canvas = None
+        self.distance_indicator_id = None
         self.lab_win = None
         self.circuit_canvas = None
         self.table_win = None
@@ -185,25 +196,29 @@ class ExperimentOneTab:
             "vol": {"x": 284, "y": 486, "w": 142, "h": 64, "title": "电压表", "fill": "#33295a"},
         }
         self.device_term_offsets = {
-            "panel": {"panel_p": (0, 22), "panel_n": (0, 48)},
-            "amm": {"amm_p": (0, 20), "amm_n": (0, 42)},
-            "res": {"res_p": (0, 20), "res_n": (0, 38)},
-            "vol": {"vol_p": (0, 6), "vol_n": (0, 28)},
+            "panel": {"panel_p": (0, 22), "panel_n": (122, 48)},
+            "amm": {"amm_p": (0, 20), "amm_n": (96, 42)},
+            "res": {"res_p": (0, 20), "res_n": (104, 38)},
+            "vol": {"vol_p": (0, 6), "vol_n": (142, 28)},
         }
         self._build()
 
     def _build(self):
-        left = tk.Frame(self.frame, bg=PANEL_BG, width=330)
-        left.pack(side=tk.LEFT, fill=tk.Y, padx=(0, 6))
-        left.pack_propagate(False)
-        mid = tk.Frame(self.frame, bg=BG)
+        body = tk.Frame(self.frame, bg=BG)
+        body.pack(fill=tk.BOTH, expand=True)
+        mid = tk.Frame(body, bg=BG)
         mid.pack(side=tk.LEFT, fill=tk.BOTH, expand=True, padx=(0, 6))
-        right = tk.Frame(self.frame, bg=PANEL_BG, width=520)
+        right = tk.Frame(body, bg=PANEL_BG, width=520)
         right.pack(side=tk.LEFT, fill=tk.Y)
         right.pack_propagate(False)
-        self._build_control(left)
-        self._build_wiring_scene(mid, large=True, show_button=True)
+        self._build_wiring_scene(mid, large=True, show_button=False)
         self._build_right(right)
+        bottom = tk.Frame(self.frame, bg=BG)
+        bottom.pack(fill=tk.X, pady=(6, 0))
+        tk.Button(bottom, text="数据分析", bg="#2266cc", fg="#fff",
+                  font=("Microsoft YaHei", 11, "bold"),
+                  activebackground="#3377dd", relief=tk.FLAT,
+                  command=self._show_analysis).pack(fill=tk.X, padx=10, ipady=6)
 
     # ── 左侧控制面板 ──
 
@@ -218,16 +233,30 @@ class ExperimentOneTab:
                  font=("Microsoft YaHei", 9)).pack(side=tk.LEFT, padx=5)
         ttk.Separator(parent, orient="horizontal").pack(fill=tk.X, padx=10, pady=6)
 
-        # 电阻箱（含 ×0.1）+ 手动输入框
-        self._build_resistance_box(parent)
+        # 当前电阻值（由实验台双击电阻箱调整）
+        tk.Label(parent, text="━━━ 负载电阻 ━━━", bg=PANEL_BG, fg=ACCENT,
+                 font=("Microsoft YaHei", 10, "bold")).pack(anchor="w", padx=10, pady=(0, 2))
+        self.r_readonly_label = tk.Label(parent, text="R = 0.0 Ω（双击实验台电阻箱修改）",
+                                         bg="#1e1e1e", fg="#00ff88",
+                                         font=("Consolas", 11, "bold"),
+                                         relief=tk.SUNKEN, bd=1, padx=8, pady=6)
+        self.r_readonly_label.pack(fill=tk.X, padx=10, pady=(2, 6))
 
         # 固定条件
         info = tk.Frame(parent, bg=PANEL_BG)
         info.pack(fill=tk.X, padx=10, pady=4)
         tk.Label(info, text="固定条件:", bg=PANEL_BG, fg="#888",
                  font=("Microsoft YaHei", 9)).pack(anchor="w")
-        tk.Label(info, text="  光强 I: 242 W/m²", bg=PANEL_BG, fg=FG,
-                 font=("Microsoft YaHei", 9)).pack(anchor="w")
+        if self.is_distance_experiment:
+            tk.Label(info, text="  距离 d: 可调（双击太阳能板）", bg=PANEL_BG, fg=FG,
+                     font=("Microsoft YaHei", 9)).pack(anchor="w")
+            tk.Label(info, text="  初始光强 I: {:.1f} W/m²".format(self.light_intensity), bg=PANEL_BG, fg=FG,
+                     font=("Microsoft YaHei", 9)).pack(anchor="w")
+            tk.Label(info, text="  提示: 每个距离需分两次接线测 Isc 和 Voc", bg=PANEL_BG, fg="#8a4b08",
+                     font=("Microsoft YaHei", 9, "bold")).pack(anchor="w")
+        else:
+            tk.Label(info, text="  光强 I: 242 W/m²", bg=PANEL_BG, fg=FG,
+                     font=("Microsoft YaHei", 9)).pack(anchor="w")
         tk.Label(info, text="  受光面积 A: 0.010 m²", bg=PANEL_BG, fg=FG,
                  font=("Microsoft YaHei", 9)).pack(anchor="w")
 
@@ -248,8 +277,23 @@ class ExperimentOneTab:
 
         ttk.Separator(parent, orient="horizontal").pack(fill=tk.X, padx=10, pady=6)
 
+        if self.is_distance_experiment:
+            mode_box = tk.Frame(parent, bg=PANEL_BG)
+            mode_box.pack(fill=tk.X, padx=10, pady=(0, 6))
+            tk.Label(mode_box, text="实验二测量模式", bg=PANEL_BG, fg=ACCENT,
+                     font=("Microsoft YaHei", 10, "bold")).pack(anchor="w")
+            mode_btns = tk.Frame(mode_box, bg=PANEL_BG)
+            mode_btns.pack(fill=tk.X, pady=(2, 0))
+            tk.Button(mode_btns, text="测短路电流 Isc", bg="#8a5a00", fg="#fff",
+                      font=("Microsoft YaHei", 9, "bold"), relief=tk.FLAT,
+                      command=lambda: self._set_exp2_measure_mode("isc")).pack(side=tk.LEFT, expand=True, fill=tk.X, padx=(0, 4), ipady=2)
+            tk.Button(mode_btns, text="测开路电压 Voc", bg="#005a8a", fg="#fff",
+                      font=("Microsoft YaHei", 9, "bold"), relief=tk.FLAT,
+                      command=lambda: self._set_exp2_measure_mode("voc")).pack(side=tk.LEFT, expand=True, fill=tk.X, padx=(4, 0), ipady=2)
+
         # 操作按钮
-        tk.Button(parent, text="● 自动采集并记录",
+        record_btn_text = "【实验二】点击记录当前数据" if self.is_distance_experiment else "● 自动采集并记录"
+        tk.Button(parent, text=record_btn_text,
                   bg=ACCENT, fg="#fff", font=("Microsoft YaHei", 11, "bold"),
                   activebackground="#ff8855", relief=tk.FLAT,
                   command=self._record_point).pack(fill=tk.X, padx=10, pady=4, ipady=4)
@@ -284,6 +328,7 @@ class ExperimentOneTab:
         self.scene.bind("<ButtonPress-1>", self._on_scene_press)
         self.scene.bind("<B1-Motion>", self._on_scene_drag)
         self.scene.bind("<ButtonRelease-1>", self._on_scene_release)
+        self.scene.bind("<Double-Button-1>", self._on_scene_double_click)
         if show_button:
             tk.Button(parent, text="一键连线", bg="#4455aa", fg="#fff",
                       font=("Microsoft YaHei", 9, "bold"),
@@ -317,7 +362,7 @@ class ExperimentOneTab:
             self.lab_win.focus_set()
             return
         win = tk.Toplevel(self.frame.winfo_toplevel())
-        win.title("实验一独立实验台")
+        win.title("{}独立实验台".format(self.experiment_name))
         win.configure(bg=BG)
         win.geometry("1080x700")
         win.resizable(True, True)
@@ -333,10 +378,7 @@ class ExperimentOneTab:
         right.pack_propagate(False)
 
         self._build_wiring_scene(left, large=True, show_button=False)
-        tk.Button(right, text="一键连线", bg="#4455aa", fg="#fff",
-                  font=("Microsoft YaHei", 10, "bold"),
-                  activebackground="#5566bb", relief=tk.FLAT,
-                  command=self._auto_wire_for_test).pack(fill=tk.X, padx=10, pady=(12, 6), ipady=4)
+        self._build_autowire_buttons(right, pady=(12, 6))
         tk.Label(right, text="右下角显示实时电路图", bg=PANEL_BG, fg="#a8bde6",
                  font=("Microsoft YaHei", 10, "bold")).pack(anchor="w", padx=10, pady=(8, 4))
         self.circuit_canvas = tk.Canvas(win, width=320, height=250, bg="#f7f4e8",
@@ -386,14 +428,21 @@ class ExperimentOneTab:
         self.drag_device_last_xy = None
 
         cw, ch = self.scene_size
-        # 实验台与桌面
-        self.scene.create_rectangle(0, 0, cw, ch, fill="#d7dadd", outline="", width=0)
-        self.scene.create_rectangle(12, 16, cw - 12, ch - 68, fill="#cfd1d4", outline="#a4a9af", width=1)
-        self.scene.create_text(cw / 2, 12, text="太阳能电池实验台（实验一）", fill="#d4e4ff",
-                               font=("Microsoft YaHei", 9, "bold"))
-        self.scene.create_rectangle(cw - 300, 24, cw - 20, 220, fill="#f6f6ef", outline="#b9bdc2", width=1)
-        self.scene.create_text(cw - 160, 38, text="实验提示区", fill="#3a4f62", font=("Microsoft YaHei", 10, "bold"))
-        self.scene.create_text(cw - 160, 72, text="按正确回路连接后记录数据", fill="#546a80", font=("Microsoft YaHei", 9))
+        # 顶部蓝色标题条（参考示例 UI）
+        self.scene.create_rectangle(0, 0, cw, 26, fill="#0a79a9", outline="#075b7f", width=1)
+        self.scene.create_rectangle(0, 0, cw, 6, fill="#3da8d1", outline="", width=0)
+        self.scene.create_text(14, 13, text="太阳能电池的特性测量", anchor="w",
+                               fill="#e9f7ff", font=("Microsoft YaHei", 10, "bold"))
+
+        # 实验台与桌面分层
+        self.scene.create_rectangle(0, 26, cw, ch, fill="#d5d6d8", outline="", width=0)
+        self.scene.create_rectangle(0, int(ch * 0.43), cw, ch - 86, fill="#bebfc2", outline="", width=0)
+        self.scene.create_rectangle(16, 38, cw - 16, ch - 96, fill="#d0d2d5", outline="#a0a4aa", width=1)
+
+        # 右上角计时盒
+        self.scene.create_rectangle(cw - 210, 34, cw - 16, 108, fill="#9ad4e9", outline="#2f7f9d", width=1)
+        self.scene.create_text(cw - 198, 47, text="实验已经进行:", anchor="w",
+                               fill="#1f4052", font=("Microsoft YaHei", 9, "bold"))
 
         # 器件布局（支持拖动）
         for dev_id, d in self.devices.items():
@@ -434,10 +483,15 @@ class ExperimentOneTab:
                 sign = "+" if term_id.endswith("_p") else "-"
                 self._add_terminal(term_id, d["x"] + ox, d["y"] + oy, sign)
 
-        self.scene.create_text(cw / 2, ch - 28, text="拖动设备可重新布局；从端子拖拽到端子连线",
-                               fill="#88a2d2", font=("Microsoft YaHei", 8))
-        self.scene.create_text(cw / 2, ch - 12, text="主回路: 板+→电流表→电阻箱→板-   电压表并联电阻箱",
-                               fill="#6f8fc7", font=("Microsoft YaHei", 7))
+        # 底部信息区
+        self.scene.create_rectangle(0, ch - 80, cw, ch - 52, fill="#0a79a9", outline="#075b7f", width=1)
+        self.scene.create_text(12, ch - 66, text="实验提示区", anchor="w",
+                               fill="#ecf8ff", font=("Microsoft YaHei", 9, "bold"))
+        self.scene.create_rectangle(0, ch - 52, cw, ch, fill="#e9f4fa", outline="#87abc2", width=1)
+        self.scene.create_text(cw / 2, ch - 34, text="拖动设备可重新布局；从端子拖拽到端子连线",
+                               fill="#466781", font=("Microsoft YaHei", 8))
+        self.scene.create_text(cw / 2, ch - 16, text="主回路: 板+→电流表→电阻箱→板-   电压表并联电阻箱",
+                               fill="#52748f", font=("Microsoft YaHei", 7))
         self._redraw_wires()
         self._update_wire_status()
 
@@ -464,26 +518,27 @@ class ExperimentOneTab:
                 capstyle=tk.ROUND, smooth=True, splinesteps=20, tags="wire_preview"
             )
             return
-        hit = self.scene.find_overlapping(event.x, event.y, event.x, event.y)
-        for item in hit:
-            for tag in self.scene.gettags(item):
-                if tag.startswith("dev_") and tag != "dev_hit":
-                    dev_id = tag.replace("dev_", "")
-                    if dev_id not in self.devices:
-                        continue
-                    self.drag_device_id = dev_id
-                    self.drag_device_last_xy = (event.x, event.y)
-                    return
+        dev_id = self._hit_device_by_bbox(event.x, event.y)
+        if dev_id in ("lamp", "panel"):
+            return
+        if dev_id is not None:
+            self.drag_device_id = dev_id
+            self.drag_device_last_xy = (event.x, event.y)
+            return
 
     def _on_scene_drag(self, event):
         if self.drag_device_id is not None and self.drag_device_last_xy is not None:
             lx, ly = self.drag_device_last_xy
             dx, dy = event.x - lx, event.y - ly
-            d = self.devices[self.drag_device_id]
+            dev_id = self.drag_device_id
+            d = self.devices[dev_id]
             d["x"] += dx
             d["y"] += dy
             self.drag_device_last_xy = (event.x, event.y)
             self._draw_scene()
+            # _draw_scene 会重置拖拽状态，这里恢复以保证连续拖动
+            self.drag_device_id = dev_id
+            self.drag_device_last_xy = (event.x, event.y)
             return
         if self.drag_line_id is None or self.drag_start_term is None:
             return
@@ -518,6 +573,225 @@ class ExperimentOneTab:
         self._redraw_wires()
         self._update_wire_status()
 
+    def _hit_device(self, x, y):
+        hit = self.scene.find_overlapping(x, y, x, y)
+        for item in hit:
+            for tag in self.scene.gettags(item):
+                if tag.startswith("dev_") and tag != "dev_hit":
+                    dev_id = tag.replace("dev_", "")
+                    if dev_id in self.devices:
+                        return dev_id
+        return self._hit_device_by_bbox(x, y)
+
+    def _hit_device_by_bbox(self, x, y):
+        for dev_id, d in self.devices.items():
+            if d["x"] <= x <= d["x"] + d["w"] and d["y"] <= y <= d["y"] + d["h"]:
+                return dev_id
+        return None
+
+    def _on_scene_double_click(self, event):
+        dev_id = self._hit_device(event.x, event.y)
+        if dev_id in ("res", "panel") and not self.connection_ok:
+            self._show_toast("接线未正确，不能调整器材参数")
+            return
+        if dev_id == "res":
+            if self.is_distance_experiment and self.data_points:
+                self._show_toast("已有记录数据，请先删除全部记录后再修改电阻")
+                return
+            self._open_resistance_dialog()
+        elif dev_id == "panel" and self.is_distance_experiment:
+            if not self.distance_resistance_confirmed:
+                self._show_toast("请先双击电阻箱设置阻值，再调节距离")
+                return
+            self._open_distance_dialog()
+
+    def _set_distance_value(self, dist_cm, auto_record=False):
+        self.distance_cm = self._normalize_distance_cm(dist_cm)
+        self.light_intensity = self._lookup_distance_light_intensity(self.distance_cm)
+        if self.distance_preview_canvas is not None and self.distance_preview_canvas.winfo_exists():
+            self._update_distance_preview(self.distance_cm)
+        # 在主实验台上同步太阳能板位置，形成“移动板子改距离”的视觉反馈
+        lamp_center_x = self.devices["lamp"]["x"] + self.devices["lamp"]["w"] / 2.0
+        min_panel_x = 220.0
+        max_panel_x = 700.0
+        x_new = min_panel_x + (self.distance_cm - 5.0) / 95.0 * (max_panel_x - min_panel_x)
+        w_panel = self.devices["panel"]["w"]
+        self.devices["panel"]["x"] = int(max(min_panel_x, min(max_panel_x, x_new - w_panel / 2.0)))
+        self._draw_scene()
+        if auto_record:
+            self._try_auto_record_on_distance_change()
+
+    def _normalize_distance_cm(self, dist_cm):
+        d = float(dist_cm)
+        d = round(d / 5.0) * 5.0
+        return max(5.0, min(100.0, d))
+
+    def _open_distance_dialog(self):
+        if self.distance_win is not None and self.distance_win.winfo_exists():
+            self.distance_win.lift()
+            self.distance_win.focus_set()
+            return
+        dlg = tk.Toplevel(self.frame.winfo_toplevel())
+        dlg.title("调节光源-太阳能板距离")
+        dlg.configure(bg=BG)
+        dlg.geometry("760x250")
+        dlg.resizable(False, False)
+        self.distance_win = dlg
+
+        tk.Label(dlg, text="距离刻度台（滑动太阳能板）", bg=ACCENT, fg="#fff",
+                 font=("Microsoft YaHei", 12, "bold")).pack(fill=tk.X, ipady=6)
+
+        body = tk.Frame(dlg, bg=BG)
+        body.pack(fill=tk.BOTH, expand=True, padx=14, pady=10)
+        self.distance_preview_canvas = tk.Canvas(body, width=720, height=110, bg="#f6f9ff",
+                                                 highlightthickness=1, highlightbackground="#6f8fb4")
+        self.distance_preview_canvas.pack(fill=tk.X)
+        self._draw_distance_preview_base()
+        self._update_distance_preview(self.distance_cm)
+
+        lbl = tk.Frame(body, bg=BG)
+        lbl.pack(fill=tk.X, pady=(8, 2))
+        tk.Label(lbl, text="距离 d (cm):", bg=BG, fg=FG,
+                 font=("Microsoft YaHei", 10, "bold")).pack(side=tk.LEFT)
+        self.distance_value_lbl = tk.Label(lbl, text="", bg=BG, fg="#255caa",
+                                           font=("Consolas", 12, "bold"))
+        self.distance_value_lbl.pack(side=tk.LEFT, padx=8)
+        self.distance_vi_lbl = tk.Label(lbl, text="", bg=BG, fg="#0f5132",
+                                        font=("Consolas", 12, "bold"))
+        self.distance_vi_lbl.pack(side=tk.RIGHT)
+
+        self.distance_scale = tk.Scale(body, from_=5, to=100, orient=tk.HORIZONTAL,
+                                       resolution=5, showvalue=False, length=700,
+                                       bg=BG, fg=FG, highlightthickness=0,
+                                       troughcolor="#bfd4ee",
+                                       command=self._on_distance_scale_change)
+        self.distance_scale.set(int(self._normalize_distance_cm(self.distance_cm)))
+        self.distance_scale.pack(fill=tk.X, pady=(2, 0))
+        self._update_distance_reading_preview(self.distance_cm)
+
+        if self.is_distance_experiment:
+            tk.Button(body, text="【实验二】记录当前数据", bg=ACCENT, fg="#fff",
+                      font=("Microsoft YaHei", 10, "bold"), relief=tk.FLAT,
+                      activebackground="#ff8855",
+                      command=self._record_point).pack(fill=tk.X, pady=(10, 0), ipady=3)
+
+        dlg.protocol("WM_DELETE_WINDOW", self._close_distance_dialog)
+
+    def _close_distance_dialog(self):
+        if self.distance_win is not None and self.distance_win.winfo_exists():
+            self.distance_win.destroy()
+        self.distance_win = None
+        self.distance_scale = None
+        self.distance_preview_canvas = None
+        self.distance_indicator_id = None
+
+    def _draw_distance_preview_base(self):
+        c = self.distance_preview_canvas
+        if c is None or not c.winfo_exists():
+            return
+        c.delete("all")
+        c.create_text(32, 20, text="光源", fill="#5c4200", font=("Microsoft YaHei", 10, "bold"), anchor="w")
+        c.create_oval(24, 28, 56, 60, fill="#ffd56f", outline="#c48a1f", width=1)
+        x0 = 80
+        x1 = 680
+        y = 72
+        c.create_line(x0, y, x1, y, fill="#3b4f6b", width=2)
+        for d in range(5, 101, 5):
+            t = (d - 5) / 95.0
+            x = x0 + t * (x1 - x0)
+            tick_h = 16 if d % 10 == 0 else 9
+            c.create_line(x, y, x, y - tick_h, fill="#3b4f6b", width=1)
+            if d % 10 == 0:
+                c.create_text(x, y + 12, text=str(d), fill="#3b4f6b", font=("Consolas", 8))
+        c.create_text(x1 + 8, y + 12, text="cm", fill="#3b4f6b", font=("Consolas", 8), anchor="w")
+        self.distance_indicator_id = c.create_rectangle(0, 32, 0, 62, fill="#2a6fbb", outline="#1d4f86", width=1)
+
+    def _update_distance_preview(self, dist_cm):
+        c = self.distance_preview_canvas
+        if c is None or not c.winfo_exists() or self.distance_indicator_id is None:
+            return
+        x0 = 80
+        x1 = 680
+        t = (dist_cm - 5.0) / 95.0
+        x = x0 + t * (x1 - x0)
+        c.coords(self.distance_indicator_id, x - 14, 32, x + 14, 62)
+        c.itemconfigure(self.distance_indicator_id)
+        c.delete("panel_lbl")
+        c.create_text(x, 24, text="太阳能板", fill="#1d4f86", font=("Microsoft YaHei", 9, "bold"), tags="panel_lbl")
+
+    def _update_distance_reading_preview(self, dist_cm):
+        v_val, i_val = self._measure_ui_from_distance_data(dist_cm)
+        self.distance_value_lbl.config(text="d = {:.0f} cm  |  E = {:.1f} W/m²".format(dist_cm, self.light_intensity))
+        self.distance_vi_lbl.config(text="U = {:.3f} V, I = {:.3f} mA".format(v_val, i_val))
+
+    def _on_distance_scale_change(self, val):
+        prev_d = self._normalize_distance_cm(self.distance_cm)
+        target_d = self._normalize_distance_cm(val)
+        if target_d > prev_d:
+            d = prev_d + 5.0
+        elif target_d < prev_d:
+            d = prev_d - 5.0
+        else:
+            d = prev_d
+        d = self._normalize_distance_cm(d)
+        self._set_distance_value(d, auto_record=False)
+        if self.distance_scale is not None and self.distance_scale.winfo_exists():
+            if abs(float(self.distance_scale.get()) - d) > 1e-9:
+                self.distance_scale.set(int(d))
+            self._update_distance_reading_preview(self.distance_cm)
+
+    def _set_resistance_value(self, val):
+        self.r_value = round(max(0.0, float(val)), 1)
+        if self.r_value == int(self.r_value):
+            txt = "R = {} Ω（双击实验台电阻箱修改）".format(int(self.r_value))
+        else:
+            txt = "R = {:.1f} Ω（双击实验台电阻箱修改）".format(self.r_value)
+        if hasattr(self, "r_readonly_label") and self.r_readonly_label.winfo_exists():
+            self.r_readonly_label.config(text=txt)
+        self._try_auto_record_on_r_change()
+
+    def _open_resistance_dialog(self):
+        dlg = tk.Toplevel(self.frame.winfo_toplevel())
+        dlg.title("调整负载电阻")
+        dlg.configure(bg=BG)
+        dlg.geometry("320x180")
+        dlg.resizable(False, False)
+        dlg.grab_set()
+
+        tk.Label(dlg, text="电阻箱阻值设定", bg=ACCENT, fg="#fff",
+                 font=("Microsoft YaHei", 12, "bold")).pack(fill=tk.X, ipady=6)
+        tk.Label(dlg, text="输入阻值 R (Ω)", bg=BG, fg=FG,
+                 font=("Microsoft YaHei", 10)).pack(pady=(14, 6))
+        v = tk.StringVar(value=str(self.r_value))
+        e = tk.Entry(dlg, textvariable=v, font=("Consolas", 12), width=14,
+                     bg="#1a1a1a", fg="#00ff88", insertbackground="#00ff88",
+                     relief=tk.SUNKEN, bd=2)
+        e.pack()
+        e.focus_set()
+        e.selection_range(0, tk.END)
+
+        def _submit():
+            try:
+                val = float(v.get().strip())
+                if val < 0:
+                    raise ValueError
+            except ValueError:
+                self._show_toast("请输入有效电阻值（>=0）")
+                return
+            self._set_resistance_value(val)
+            if self.is_distance_experiment:
+                self.distance_resistance_confirmed = True
+            dlg.destroy()
+
+        btns = tk.Frame(dlg, bg=BG)
+        btns.pack(fill=tk.X, padx=24, pady=16)
+        tk.Button(btns, text="确认", bg="#2a6", fg="#fff", relief=tk.FLAT,
+                  font=("Microsoft YaHei", 10, "bold"), command=_submit).pack(side=tk.LEFT, expand=True, padx=4)
+        tk.Button(btns, text="取消", bg="#644", fg="#fff", relief=tk.FLAT,
+                  font=("Microsoft YaHei", 10), command=dlg.destroy).pack(side=tk.LEFT, expand=True, padx=4)
+        dlg.bind("<Return>", lambda _e: _submit())
+        dlg.bind("<Escape>", lambda _e: dlg.destroy())
+
     def _terminal_degree(self, term_id):
         d = 0
         for x, y in self.wires:
@@ -550,37 +824,110 @@ class ExperimentOneTab:
                                    fill="#ffd38a", outline="#70451d", width=1, tags="wire")
 
     def _update_wire_status(self):
-        required = {
-            tuple(sorted(("panel_p", "amm_p"))),
-            tuple(sorted(("amm_n", "res_p"))),
-            tuple(sorted(("res_n", "panel_n"))),
-            tuple(sorted(("vol_p", "res_p"))),
-            tuple(sorted(("vol_n", "res_n"))),
-        }
-        ok = required.issubset(self.wires)
+        if self.is_distance_experiment:
+            if self.exp2_measure_mode == "isc":
+                required = {
+                    tuple(sorted(("panel_p", "amm_p"))),
+                    tuple(sorted(("amm_n", "panel_n"))),
+                }
+                forbidden = {
+                    tuple(sorted(("amm_n", "res_p"))),
+                    tuple(sorted(("res_n", "panel_n"))),
+                    tuple(sorted(("vol_p", "res_p"))),
+                    tuple(sorted(("vol_n", "res_n"))),
+                    tuple(sorted(("vol_p", "panel_p"))),
+                    tuple(sorted(("vol_n", "panel_n"))),
+                }
+                ok = required.issubset(self.wires) and not any(w in self.wires for w in forbidden)
+            else:
+                required = {
+                    tuple(sorted(("vol_p", "panel_p"))),
+                    tuple(sorted(("vol_n", "panel_n"))),
+                }
+                forbidden = {
+                    tuple(sorted(("panel_p", "amm_p"))),
+                    tuple(sorted(("amm_n", "panel_n"))),
+                    tuple(sorted(("amm_n", "res_p"))),
+                    tuple(sorted(("res_n", "panel_n"))),
+                    tuple(sorted(("vol_p", "res_p"))),
+                    tuple(sorted(("vol_n", "res_n"))),
+                }
+                ok = required.issubset(self.wires) and not any(w in self.wires for w in forbidden)
+        else:
+            required = {
+                tuple(sorted(("panel_p", "amm_p"))),
+                tuple(sorted(("amm_n", "res_p"))),
+                tuple(sorted(("res_n", "panel_n"))),
+                tuple(sorted(("vol_p", "res_p"))),
+                tuple(sorted(("vol_n", "res_n"))),
+            }
+            ok = required.issubset(self.wires)
         self.connection_ok = ok
         if self.wire_status is None or not self.wire_status.winfo_exists():
             self._update_circuit_diagram()
             return
         if ok:
-            self.wire_status.config(text="接线状态: 正确，可采集", fg="#66ff99")
-            self._try_auto_record_on_r_change()
+            if self.is_distance_experiment:
+                mode_text = "短路电流 Isc" if self.exp2_measure_mode == "isc" else "开路电压 Voc"
+                self.wire_status.config(text="接线状态: 正确（{}）".format(mode_text), fg="#66ff99")
+            else:
+                self.wire_status.config(text="接线状态: 正确，可采集", fg="#66ff99")
+                self._try_auto_record_on_r_change()
         else:
-            self.wire_status.config(text="接线状态: 未完成", fg="#ffcc66")
+            if self.is_distance_experiment:
+                if self.exp2_measure_mode == "isc":
+                    msg = "接线状态: 未完成（Isc 模式需 panel+→A→panel-，且无电阻/电压表支路）"
+                else:
+                    msg = "接线状态: 未完成（Voc 模式需电压表直接并在 panel±，断开 A-电阻支路）"
+                self.wire_status.config(text=msg, fg="#ffcc66")
+            else:
+                self.wire_status.config(text="接线状态: 未完成", fg="#ffcc66")
         self._update_circuit_diagram()
 
     def _auto_wire_for_test(self):
         """测试阶段：一键完成实验一标准接线。"""
-        self.wires = {
-            tuple(sorted(("panel_p", "amm_p"))),
-            tuple(sorted(("amm_n", "res_p"))),
-            tuple(sorted(("res_n", "panel_n"))),
-            tuple(sorted(("vol_p", "res_p"))),
-            tuple(sorted(("vol_n", "res_n"))),
-        }
+        if self.is_distance_experiment:
+            if self.exp2_measure_mode == "isc":
+                self.wires = {
+                    tuple(sorted(("panel_p", "amm_p"))),
+                    tuple(sorted(("amm_n", "panel_n"))),
+                }
+            else:
+                self.wires = {
+                    tuple(sorted(("vol_p", "panel_p"))),
+                    tuple(sorted(("vol_n", "panel_n"))),
+                }
+        else:
+            self.wires = {
+                tuple(sorted(("panel_p", "amm_p"))),
+                tuple(sorted(("amm_n", "res_p"))),
+                tuple(sorted(("res_n", "panel_n"))),
+                tuple(sorted(("vol_p", "res_p"))),
+                tuple(sorted(("vol_n", "res_n"))),
+            }
         self._redraw_wires()
         self._update_wire_status()
         self._show_toast("已自动完成测试接线")
+
+    def _auto_wire_exp2_isc(self):
+        self._set_exp2_measure_mode("isc")
+        self._auto_wire_for_test()
+
+    def _auto_wire_exp2_voc(self):
+        self._set_exp2_measure_mode("voc")
+        self._auto_wire_for_test()
+
+    def _set_exp2_measure_mode(self, mode):
+        if not self.is_distance_experiment:
+            return
+        if mode not in ("isc", "voc"):
+            return
+        self.exp2_measure_mode = mode
+        if mode == "isc":
+            self._set_resistance_value(0.0)
+        self.connection_ok = False
+        self._update_wire_status()
+        self._show_toast("已切换到 {} 接线模式".format("短路电流 Isc" if mode == "isc" else "开路电压 Voc"))
 
     def _layout_devices_for_large_scene(self):
         self.devices["lamp"]["x"], self.devices["lamp"]["y"] = 70, 70
@@ -787,7 +1134,7 @@ class ExperimentOneTab:
         tk.Button(btns, text="打开特性曲线窗口", bg="#2a6", fg="#fff",
                   font=("Microsoft YaHei", 10, "bold"), relief=tk.FLAT,
                   activebackground="#3b7",
-                  command=self._open_curve_window).pack(fill=tk.X, ipady=4)
+                  command=self._open_curve_and_analysis).pack(fill=tk.X, ipady=4)
 
         btn_row = tk.Frame(parent, bg=PANEL_BG)
         btn_row.pack(fill=tk.X, padx=8, pady=(6, 8))
@@ -795,6 +1142,7 @@ class ExperimentOneTab:
                   font=("Microsoft YaHei", 10, "bold"), relief=tk.FLAT,
                   activebackground="#3377dd",
                   command=self._open_data_table_window).pack(fill=tk.X, ipady=4)
+        self._build_autowire_buttons(parent, pady=(2, 8))
 
     def _open_data_table_window(self):
         if self.table_win is not None and self.table_win.winfo_exists():
@@ -802,7 +1150,7 @@ class ExperimentOneTab:
             self.table_win.focus_set()
             return
         win = tk.Toplevel(self.frame.winfo_toplevel())
-        win.title("实验一数据表")
+        win.title("{}数据表".format(self.experiment_name))
         win.configure(bg=BG)
         win.geometry("620x360")
         win.resizable(True, True)
@@ -819,7 +1167,7 @@ class ExperimentOneTab:
 
         table_frame = tk.Frame(win, bg=PANEL_BG)
         table_frame.pack(fill=tk.BOTH, expand=True, padx=8, pady=(0, 8))
-        cols = ("序号", "R (Ω)", "U (V)", "I (mA)", "P (mW)")
+        cols = ("序号", "d (cm)", "I (W/m²)", "VOC (V)", "ISC (mA)") if self.is_distance_experiment else ("序号", "R (Ω)", "U (V)", "I (mA)", "P (mW)")
         self.tree = ttk.Treeview(table_frame, columns=cols, show="headings")
         for c in cols:
             self.tree.heading(c, text=c)
@@ -845,7 +1193,7 @@ class ExperimentOneTab:
             self.curve_win.focus_set()
             return
         win = tk.Toplevel(self.frame.winfo_toplevel())
-        win.title("实验一特性曲线")
+        win.title("{}特性曲线".format(self.experiment_name))
         win.configure(bg=BG)
         win.geometry("980x460")
         win.resizable(True, True)
@@ -861,10 +1209,11 @@ class ExperimentOneTab:
 
         self.fig2 = Figure(figsize=(4.5, 3.2), dpi=100, facecolor=BG)
         self.ax2 = self.fig2.add_subplot(111)
-        self._style_ax(self.ax2, title="功率输出曲线", xlabel="R (Ω)", ylabel="P (mW)")
+        self._style_ax(self.ax2, title="功率输出曲线（P-V）", xlabel="U (V)", ylabel="P (mW)")
         self.canvas2 = FigureCanvasTkAgg(self.fig2, master=chart_frame)
         self.canvas2.get_tk_widget().pack(side=tk.LEFT, fill=tk.BOTH, expand=True, padx=(4, 0))
-        if len(self.data_points) >= 10:
+        min_points = 2 if self.is_distance_experiment else 10
+        if len(self.data_points) >= min_points:
             self._draw_plot()
 
         def _on_close():
@@ -876,16 +1225,70 @@ class ExperimentOneTab:
 
         win.protocol("WM_DELETE_WINDOW", _on_close)
 
+    def _open_curve_and_analysis(self):
+        self._open_curve_window()
+        if not self.is_distance_experiment:
+            self._show_analysis()
+
+    def _build_autowire_buttons(self, parent, pady=(6, 6)):
+        box = tk.Frame(parent, bg=PANEL_BG)
+        box.pack(fill=tk.X, padx=8, pady=pady)
+        tk.Label(box, text="接线辅助", bg=PANEL_BG, fg=ACCENT,
+                 font=("Microsoft YaHei", 10, "bold")).pack(anchor="w", pady=(0, 4))
+        if self.is_distance_experiment:
+            row = tk.Frame(box, bg=PANEL_BG)
+            row.pack(fill=tk.X)
+            tk.Button(row, text="一键连线 Isc", bg="#8a5a00", fg="#fff",
+                      font=("Microsoft YaHei", 9, "bold"), relief=tk.FLAT,
+                      activebackground="#a06b00",
+                      command=self._auto_wire_exp2_isc).pack(side=tk.LEFT, expand=True, fill=tk.X, padx=(0, 3), ipady=3)
+            tk.Button(row, text="一键连线 Voc", bg="#005a8a", fg="#fff",
+                      font=("Microsoft YaHei", 9, "bold"), relief=tk.FLAT,
+                      activebackground="#0d6ea3",
+                      command=self._auto_wire_exp2_voc).pack(side=tk.LEFT, expand=True, fill=tk.X, padx=(3, 0), ipady=3)
+        else:
+            tk.Button(box, text="一键连线", bg="#4455aa", fg="#fff",
+                      font=("Microsoft YaHei", 10, "bold"),
+                      activebackground="#5566bb", relief=tk.FLAT,
+                      command=self._auto_wire_for_test).pack(fill=tk.X, ipady=4)
+
     def _refresh_table_view(self):
         if self.tree is None or not self.tree.winfo_exists():
             return
         for item_id in self.tree.get_children():
             self.tree.delete(item_id)
-        for idx, dp in enumerate(self.data_points, start=1):
-            self.tree.insert("", "end", values=(
-                idx, "{:g}".format(dp["R"]), "{:.3f}".format(dp["U"]),
-                "{:.3f}".format(dp["I"]), "{:.3f}".format(dp["P"])
-            ))
+        if self.is_distance_experiment:
+            rows = []
+            for dp in self.data_points:
+                rows.append({
+                    "d": float(dp["d"]),
+                    "P": float(dp["P"]),
+                    "U": float(dp["U"]),
+                    "I": float(dp["I"]),
+                })
+            for d, pp in self.exp2_partial_points.items():
+                d = float(d)
+                if any(abs(r["d"] - d) < 1e-9 for r in rows):
+                    continue
+                rows.append({
+                    "d": d,
+                    "P": float(pp.get("P", self._lookup_distance_light_intensity(d))),
+                    "U": pp.get("U"),
+                    "I": pp.get("I"),
+                })
+            rows.sort(key=lambda r: r["d"])
+            for idx, r in enumerate(rows, start=1):
+                u_txt = "{:.3f}".format(r["U"]) if r["U"] is not None else "--"
+                i_txt = "{:.3f}".format(r["I"]) if r["I"] is not None else "--"
+                self.tree.insert("", "end", values=(
+                    idx, "{:g}".format(r["d"]), "{:.3f}".format(r["P"]), u_txt, i_txt
+                ))
+        else:
+            for idx, dp in enumerate(self.data_points, start=1):
+                self.tree.insert("", "end", values=(
+                    idx, "{:g}".format(dp["R"]), "{:.3f}".format(dp["U"]),
+                    "{:.3f}".format(dp["I"]), "{:.3f}".format(dp["P"])
+                ))
 
     def _style_ax(self, ax, title="", xlabel="", ylabel=""):
         ax.set_facecolor("#0f0f23")
@@ -904,10 +1307,11 @@ class ExperimentOneTab:
         eps = 1e-9
         best_i = 0
         best_p = self.data_points[0]["P"]
-        best_r = self.data_points[0]["R"]
+        first_x = self.data_points[0]["d"] if self.is_distance_experiment else self.data_points[0]["R"]
+        best_r = first_x
         for i in range(1, len(self.data_points)):
             p = self.data_points[i]["P"]
-            r = self.data_points[i]["R"]
+            r = self.data_points[i]["d"] if self.is_distance_experiment else self.data_points[i]["R"]
             if p > best_p + eps:
                 best_i, best_p, best_r = i, p, r
             elif abs(p - best_p) <= eps and r < best_r:
@@ -923,35 +1327,69 @@ class ExperimentOneTab:
         if not self.connection_ok:
             self._show_toast("请先按场景完成正确接线")
             return
-        R = self.r_value
-        if R <= 0:
-            self._show_toast("请先将电阻箱调到大于 0 的值")
+        if self.is_distance_experiment and self.exp2_measure_mode == "isc" and abs(self.r_value) > 1e-9:
+            self._show_toast("Isc 测量时电阻必须为 0 Ω")
             return
+        x_key = "d" if self.is_distance_experiment else "R"
+        x_val = self.distance_cm if self.is_distance_experiment else self.r_value
+        if not self.is_distance_experiment:
+            for dp in self.data_points:
+                if abs(dp[x_key] - x_val) < 1e-6:
+                    label = "d={:g} cm".format(x_val) if self.is_distance_experiment else "R={:g} Ω".format(x_val)
+                    self._show_toast("已存在 {} 的数据，不可重复记录！".format(label))
+                    return
 
-        for dp in self.data_points:
-            if abs(dp["R"] - R) < 1e-6:
-                self._show_toast("已存在 R={:g} Ω 的数据，不可重复记录！".format(R))
+        U_val, I_val = self._measure_ui_from_experimental_data(x_val)
+        P_val = self.light_intensity if self.is_distance_experiment else (U_val * I_val)
+
+        if self.is_distance_experiment:
+            key = float(x_val)
+            for dp in self.data_points:
+                if abs(dp["d"] - key) < 1e-6:
+                    self._show_toast("已存在 d={:g} cm 的完整数据，不可重复记录".format(key))
+                    return
+            partial = self.exp2_partial_points.get(key, {"d": key, "P": P_val})
+            partial["P"] = P_val
+            if self.exp2_measure_mode == "isc":
+                partial["I"] = I_val
+                self.exp2_partial_points[key] = partial
+                if self.tree is not None and self.tree.winfo_exists():
+                    self._refresh_table_view()
+                self._show_toast("已记录 Isc（d={:g} cm），请切换到 Voc 接线后再记录".format(key))
                 return
-
-        U_val, I_val = self._measure_ui_from_experimental_data(R)
-        P_val = U_val * I_val  # mW
-
-        point = {"R": R, "U": U_val, "I": I_val, "P": P_val}
+            partial["U"] = U_val
+            if "I" not in partial:
+                self.exp2_partial_points[key] = partial
+                if self.tree is not None and self.tree.winfo_exists():
+                    self._refresh_table_view()
+                self._show_toast("已记录 Voc（d={:g} cm），请切换到 Isc 接线后再记录".format(key))
+                return
+            point = {"U": partial["U"], "I": partial["I"], "P": partial["P"], "d": key}
+            self.exp2_partial_points.pop(key, None)
+        else:
+            point = {"U": U_val, "I": I_val, "P": P_val}
+            point[x_key] = x_val
         self.data_points.append(point)
         self._update_core_principle(U_val, I_val)
 
-        idx = len(self.data_points)
         if self.tree is not None and self.tree.winfo_exists():
-            self.tree.insert("", "end", values=(
-                idx, "{:g}".format(R), "{:.3f}".format(U_val),
-                "{:.3f}".format(I_val), "{:.3f}".format(P_val)
-            ))
-        self.last_auto_record_r = R
+            self._refresh_table_view()
+        if self.is_distance_experiment:
+            self.last_auto_record_distance = x_val
+        else:
+            self.last_auto_record_r = x_val
         if show_feedback:
-            self._show_toast("已记录 R={:g} Ω".format(R))
+            label = "d={:g} cm".format(x_val) if self.is_distance_experiment else "R={:g} Ω".format(x_val)
+            self._show_toast("已记录 {}".format(label))
 
-    def _measure_ui_from_experimental_data(self, R):
+    def _measure_ui_from_experimental_data(self, x_val):
         """实验一采集：基于实测报告数据。优先精确点，否则按 R 线性插值。"""
+        if self.is_distance_experiment:
+            self._set_distance_value(x_val, auto_record=False)
+            v_val, i_val = self._measure_ui_from_distance_data(self.distance_cm)
+            return float(v_val), float(i_val)
+
+        R = x_val
         data = get_experimental_data()["iv_data"]
         Rs = [float(x) for x in data["R"]]
         Us = [float(x) for x in data["U"]]
@@ -983,11 +1421,45 @@ class ExperimentOneTab:
 
         return Us_s[-1], Is_s[-1]
 
+    def _measure_ui_from_distance_data(self, dist_cm):
+        """实验二采集：基于实验报告的单晶硅距离数据（Voc/Isc）。"""
+        data = get_experimental_data()["distance_data"]
+        ds = [float(x) for x in data["d_cm"]]
+        vs = [float(x) for x in data["Voc_V"]]
+        cs = [float(x) for x in data["Isc_mA"]]
+        voc = self._interp_by_distance(dist_cm, ds, vs)
+        isc = self._interp_by_distance(dist_cm, ds, cs)
+        return float(voc), float(isc)
+
+    def _lookup_distance_light_intensity(self, dist_cm):
+        data = get_experimental_data()["distance_data"]
+        ds = [float(x) for x in data["d_cm"]]
+        es = [float(x) for x in data["E_wm2"]]
+        return float(self._interp_by_distance(dist_cm, ds, es))
+
+    def _interp_by_distance(self, d, xs, ys):
+        for x0, y0 in zip(xs, ys):
+            if abs(d - x0) < 1e-9:
+                return y0
+        order = np.argsort(xs)
+        xs_s = [xs[i] for i in order]
+        ys_s = [ys[i] for i in order]
+        if d <= xs_s[0]:
+            return ys_s[0]
+        if d >= xs_s[-1]:
+            return ys_s[-1]
+        for i in range(len(xs_s) - 1):
+            x1, x2 = xs_s[i], xs_s[i + 1]
+            if x1 <= d <= x2:
+                t = (d - x1) / (x2 - x1) if x2 != x1 else 0.0
+                return ys_s[i] + t * (ys_s[i + 1] - ys_s[i])
+        return ys_s[-1]
+
     def _try_auto_record_on_r_change(self):
         """接线正确后，调电阻自动采集并记录（同一 R 仅记录一次）。"""
         if not self.connection_ok:
             return
-        if self.r_value <= 0:
+        if self.is_distance_experiment:
             return
         if self.last_auto_record_r is not None and abs(self.r_value - self.last_auto_record_r) < 1e-9:
             return
@@ -995,6 +1467,10 @@ class ExperimentOneTab:
             if abs(dp["R"] - self.r_value) < 1e-9:
                 return
         self._record_point_impl(show_feedback=False)
+
+    def _try_auto_record_on_distance_change(self):
+        # 实验二改为手动点击按钮记录，不再随距离变化自动记录。
+        return
 
     # ── 删除选中行 ──
 
@@ -1008,9 +1484,12 @@ class ExperimentOneTab:
             return
         for item_id in sel:
             vals = self.tree.item(item_id, "values")
-            r_val = float(vals[1])
-            self.data_points = [dp for dp in self.data_points
-                                if abs(dp["R"] - r_val) > 1e-6]
+            x_val = float(vals[1])
+            if self.is_distance_experiment:
+                self.data_points = [dp for dp in self.data_points if abs(dp["d"] - x_val) > 1e-6]
+                self.exp2_partial_points.pop(float(x_val), None)
+            else:
+                self.data_points = [dp for dp in self.data_points if abs(dp["R"] - x_val) > 1e-6]
             self.tree.delete(item_id)
         self._reindex_table()
 
@@ -1025,17 +1504,26 @@ class ExperimentOneTab:
     def _on_table_double_click(self, event):
         if self.tree is None or not self.tree.winfo_exists():
             return
+        if self.is_distance_experiment:
+            self._show_toast("实验二记录请通过接线与记录按钮更新")
+            return
         item_id = self.tree.identify_row(event.y)
         col_id = self.tree.identify_column(event.x)
         if not item_id or not col_id:
             return
 
-        # 仅允许编辑 R/U/I 三列；序号和 P 由程序维护
-        if col_id in ("#1", "#5"):
+        # 仅允许编辑 X/U/I 三列（实验二对应 X/VOC/ISC）；序号和派生列不可编辑
+        blocked_cols = ("#1", "#3") if self.is_distance_experiment else ("#1", "#5")
+        if col_id in blocked_cols:
             self._show_toast("该列不可编辑")
             return
 
-        cols_map = {"#2": ("R", "R (Ω)"), "#3": ("U", "U (V)"), "#4": ("I", "I (mA)")}
+        x_key = "d" if self.is_distance_experiment else "R"
+        x_name = "d (cm)" if self.is_distance_experiment else "R (Ω)"
+        if self.is_distance_experiment:
+            cols_map = {"#2": (x_key, x_name), "#4": ("U", "VOC (V)"), "#5": ("I", "ISC (mA)")}
+        else:
+            cols_map = {"#2": (x_key, x_name), "#3": ("U", "U (V)"), "#4": ("I", "I (mA)")}
         if col_id not in cols_map:
             return
         field, field_text = cols_map[col_id]
@@ -1073,23 +1561,33 @@ class ExperimentOneTab:
                 self._show_toast("请输入有效数字（>=0）")
                 return
 
-            if field == "R":
+            if field == x_key:
                 for i, dp in enumerate(self.data_points):
-                    if i != row_idx and abs(dp["R"] - new_val) < 1e-9:
-                        self._show_toast("已存在相同 R，不能重复")
+                    if i != row_idx and abs(dp[x_key] - new_val) < 1e-9:
+                        self._show_toast("已存在相同 {}，不能重复".format(x_name))
                         return
 
             self.data_points[row_idx][field] = new_val
-            self.data_points[row_idx]["P"] = self.data_points[row_idx]["U"] * self.data_points[row_idx]["I"]
+            if not self.is_distance_experiment:
+                self.data_points[row_idx]["P"] = self.data_points[row_idx]["U"] * self.data_points[row_idx]["I"]
 
             dp = self.data_points[row_idx]
-            self.tree.item(item_id, values=(
-                row_idx + 1,
-                "{:g}".format(dp["R"]),
-                "{:.3f}".format(dp["U"]),
-                "{:.3f}".format(dp["I"]),
-                "{:.3f}".format(dp["P"]),
-            ))
+            if self.is_distance_experiment:
+                self.tree.item(item_id, values=(
+                    row_idx + 1,
+                    "{:g}".format(dp[x_key]),
+                    "{:.3f}".format(dp["P"]),
+                    "{:.3f}".format(dp["U"]),
+                    "{:.3f}".format(dp["I"]),
+                ))
+            else:
+                self.tree.item(item_id, values=(
+                    row_idx + 1,
+                    "{:g}".format(dp[x_key]),
+                    "{:.3f}".format(dp["U"]),
+                    "{:.3f}".format(dp["I"]),
+                    "{:.3f}".format(dp["P"]),
+                ))
 
             if len(self.data_points) >= 10:
                 self._draw_plot()
@@ -1117,6 +1615,7 @@ class ExperimentOneTab:
 
     def _clear_data(self):
         self.data_points.clear()
+        self.exp2_partial_points = {}
         self.last_auto_record_r = None
         self._refresh_table_view()
         if self.ax1 is not None and self.canvas1 is not None:
@@ -1125,7 +1624,7 @@ class ExperimentOneTab:
             self.canvas1.draw_idle()
         if self.ax2 is not None and self.canvas2 is not None:
             self.ax2.clear()
-            self._style_ax(self.ax2, title="功率输出曲线", xlabel="R (Ω)", ylabel="P (mW)")
+            self._style_ax(self.ax2, title="功率输出曲线（P-V）", xlabel="U (V)", ylabel="P (mW)")
             self.canvas2.draw_idle()
 
     def _load_standard_data(self):
@@ -1164,8 +1663,9 @@ class ExperimentOneTab:
     # ── 绘图（≥10 组才绘图）──
 
     def _draw_plot(self):
-        if len(self.data_points) < 10:
-            self._show_toast("需要至少 10 组数据才能绘图！当前 {} 组".format(len(self.data_points)))
+        min_points = 2 if self.is_distance_experiment else 10
+        if len(self.data_points) < min_points:
+            self._show_toast("需要至少 {} 组数据才能绘图！当前 {} 组".format(min_points, len(self.data_points)))
             return
         if self.curve_win is None or not self.curve_win.winfo_exists():
             self._open_curve_window()
@@ -1174,7 +1674,6 @@ class ExperimentOneTab:
 
         Us = [d["U"] for d in self.data_points]
         Is = [d["I"] for d in self.data_points]
-        Rs = [d["R"] for d in self.data_points]
         Ps = [d["P"] for d in self.data_points]
 
         # ── 图1：伏安特性曲线 (I vs U) ──
@@ -1185,40 +1684,47 @@ class ExperimentOneTab:
         Is_sorted = [Is[i] for i in order_u]
         self.ax1.plot(Us_sorted, Is_sorted, "o-", color=ACCENT, linewidth=2,
                       markersize=5, label="I-U")
-        max_p_idx = self._best_point_index()
-        self.ax1.plot(Us[max_p_idx], Is[max_p_idx], "v", color="#ff4444",
-                      markersize=10, zorder=5, label="MPP")
         self.ax1.legend(loc="upper right", fontsize=8, framealpha=0.4,
                         labelcolor=FG, prop=plt_font)
         self.fig1.tight_layout()
         self.canvas1.draw_idle()
 
-        # ── 图2：功率输出曲线 (P vs R) ──
+        # ── 图2：功率输出曲线 (P vs U) ──
         self.ax2.clear()
-        self._style_ax(self.ax2, title="功率输出曲线", xlabel="R (Ω)", ylabel="P (mW)")
-        order_r = np.argsort(Rs)
-        Rs_sorted = [Rs[i] for i in order_r]
-        Ps_sorted = [Ps[i] for i in order_r]
-
-        # 电阻跨度过大时自动使用对数横轴，避免小电阻区被压缩
-        positive_rs = [r for r in Rs_sorted if r > 0]
-        use_log_x = False
-        if len(positive_rs) >= 2:
-            r_min = min(positive_rs)
-            r_max = max(positive_rs)
-            use_log_x = (r_min > 0) and (r_max / r_min >= 30)
-        if use_log_x:
-            self.ax2.set_xscale("log")
-            self.ax2.set_xlabel("R (Ω, log)", fontproperties=plt_font, color=FG, fontsize=9)
-
-        self.ax2.plot(Rs_sorted, Ps_sorted, "s-", color=ACCENT2, linewidth=2,
-                      markersize=5, label="P-R")
-        self.ax2.plot(Rs[max_p_idx], Ps[max_p_idx], "v", color="#ff4444",
-                      markersize=10, zorder=5, label="MPP")
+        self._style_ax(self.ax2, title="功率输出曲线（P-V）", xlabel="U (V)", ylabel="P (mW)")
+        order_u2 = np.argsort(Us)
+        Us_sorted2 = [Us[i] for i in order_u2]
+        Ps_sorted = [Ps[i] for i in order_u2]
+        self.ax2.plot(Us_sorted2, Ps_sorted, "s-", color=ACCENT2, linewidth=2,
+                      markersize=5, label="P-V")
         self.ax2.legend(loc="upper right", fontsize=8, framealpha=0.4,
                         labelcolor=FG, prop=plt_font)
         self.fig2.tight_layout()
         self.canvas2.draw_idle()
+
+        if self.is_distance_experiment:
+            intensities = [d["P"] for d in self.data_points]
+            self.ax1.clear()
+            self._style_ax(self.ax1, title="开路电压-光强关系曲线", xlabel="I (W/m²)", ylabel="VOC (V)")
+            order_i = np.argsort(intensities)
+            i_sorted = [intensities[i] for i in order_i]
+            voc_sorted = [Us[i] for i in order_i]
+            self.ax1.plot(i_sorted, voc_sorted, "o-", color=ACCENT, linewidth=2,
+                          markersize=5, label="VOC-I")
+            self.ax1.legend(loc="upper right", fontsize=8, framealpha=0.4,
+                            labelcolor=FG, prop=plt_font)
+            self.fig1.tight_layout()
+            self.canvas1.draw_idle()
+
+            self.ax2.clear()
+            self._style_ax(self.ax2, title="短路电流-光强关系曲线", xlabel="I (W/m²)", ylabel="ISC (mA)")
+            isc_sorted = [Is[i] for i in order_i]
+            self.ax2.plot(i_sorted, isc_sorted, "s-", color=ACCENT2, linewidth=2,
+                          markersize=5, label="ISC-I")
+            self.ax2.legend(loc="upper right", fontsize=8, framealpha=0.4,
+                            labelcolor=FG, prop=plt_font)
+            self.fig2.tight_layout()
+            self.canvas2.draw_idle()
 
     # ── 数据分析弹窗 ──
 
@@ -1231,9 +1737,42 @@ class ExperimentOneTab:
         best = self.data_points[best_idx]
         max_p = best["P"]
 
-        R0 = best["R"]
+        R0 = best["d"] if self.is_distance_experiment else best["R"]
         Um = best["U"]
         Im = best["I"]
+        if self.is_distance_experiment:
+            win = tk.Toplevel(self.frame.winfo_toplevel())
+            win.title("数据分析结果")
+            win.configure(bg=BG)
+            win.geometry("520x360")
+            win.resizable(False, False)
+
+            tk.Label(win, text="数据分析结果", bg=ACCENT, fg="#fff",
+                     font=("Microsoft YaHei", 14, "bold")).pack(fill=tk.X, ipady=8)
+            tk.Label(win, text="", bg=BG).pack(pady=(8, 6))
+            table = tk.Frame(win, bg=PANEL_BG)
+            table.pack(fill=tk.X, padx=30)
+            results = [
+                ("最佳距离 d*", "{:g} cm".format(R0)),
+                ("对应电压 U", "{:.3f} V".format(Um)),
+                ("对应电流 I", "{:.3f} mA".format(Im)),
+                ("最大输出功率 Pmax", "{:.3f} mW".format(max_p)),
+                ("当前负载电阻", "{:g} Ω".format(self.r_value)),
+            ]
+            for i, (label, value) in enumerate(results):
+                bg_c = "#1a2a3e" if i % 2 == 0 else "#16213e"
+                row = tk.Frame(table, bg=bg_c)
+                row.pack(fill=tk.X, ipady=6)
+                tk.Label(row, text="  " + label, bg=bg_c, fg=FG,
+                         font=("Microsoft YaHei", 11), anchor="w").pack(side=tk.LEFT)
+                tk.Label(row, text=value + "  ", bg=bg_c, fg=ACCENT2,
+                         font=("Consolas", 13, "bold"), anchor="e").pack(side=tk.RIGHT)
+            tk.Label(win, text="", bg=BG).pack(pady=8)
+            tk.Button(win, text="关闭", bg="#644", fg="#fff",
+                      font=("Microsoft YaHei", 10), relief=tk.FLAT,
+                      activebackground="#855",
+                      command=win.destroy).pack(ipady=4, padx=20)
+            return
 
         # 仅使用已记录实测点做分析，不做任何拟合/外推：
         # Uoc_exp: 取最大电阻实测点电压（最接近开路）
@@ -1315,13 +1854,22 @@ class ExperimentTab:
         self._build()
 
     def _build(self):
-        left = tk.Frame(self.frame, bg=PANEL_BG, width=360)
-        left.pack(side=tk.LEFT, fill=tk.Y, padx=(0, 6))
-        left.pack_propagate(False)
-        right = tk.Frame(self.frame, bg=BG)
+        body = tk.Frame(self.frame, bg=BG)
+        body.pack(fill=tk.BOTH, expand=True)
+        mid = tk.Frame(body, bg=PANEL_BG, width=420)
+        mid.pack(side=tk.LEFT, fill=tk.Y, padx=(0, 6))
+        mid.pack_propagate(False)
+        right = tk.Frame(body, bg=BG)
         right.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
-        self._build_control(left)
+        self._build_control(mid)
         self._build_right(right)
+
+        bottom = tk.Frame(self.frame, bg=BG)
+        bottom.pack(fill=tk.X, pady=(6, 0))
+        tk.Button(bottom, text="数据分析", bg="#2266cc", fg="#fff",
+                  font=("Microsoft YaHei", 11, "bold"),
+                  activebackground="#3377dd", relief=tk.FLAT,
+                  command=self._draw_plot).pack(fill=tk.X, padx=10, ipady=6)
 
     def _build_control(self, parent):
         tk.Label(parent, text="电池类型", bg=PANEL_BG, fg=FG,
@@ -1368,14 +1916,10 @@ class ExperimentTab:
 
         btn_frame = tk.Frame(parent, bg=PANEL_BG)
         btn_frame.pack(fill=tk.X, padx=10, pady=4)
-        tk.Button(btn_frame, text="绘图", bg="#2a6", fg="#fff",
-                  font=("Microsoft YaHei", 10), relief=tk.FLAT,
-                  activebackground="#3b7",
-                  command=self._draw_plot).pack(side=tk.LEFT, expand=True, fill=tk.X, padx=2)
         tk.Button(btn_frame, text="清除数据", bg="#644", fg="#fff",
                   font=("Microsoft YaHei", 10), relief=tk.FLAT,
                   activebackground="#855",
-                  command=self._clear_data).pack(side=tk.LEFT, expand=True, fill=tk.X, padx=2)
+                  command=self._clear_data).pack(fill=tk.X, padx=2)
 
     def _build_distance_control(self, parent):
         tk.Label(parent, text="━━━ 光源距离 ━━━", bg=PANEL_BG, fg=ACCENT,
@@ -1698,7 +2242,19 @@ class SolarCellApp:
 
         main = tk.Frame(self.root, bg=BG)
         main.pack(fill=tk.BOTH, expand=True, padx=8, pady=8)
-        self.exp1 = ExperimentOneTab(main)
+        tabs = ttk.Notebook(main)
+        tabs.pack(fill=tk.BOTH, expand=True)
+
+        exp1_frame = tk.Frame(tabs, bg=BG)
+        exp2_frame = tk.Frame(tabs, bg=BG)
+        exp3_frame = tk.Frame(tabs, bg=BG)
+        tabs.add(exp1_frame, text="实验一  伏安特性")
+        tabs.add(exp2_frame, text="实验二  距离特性")
+        tabs.add(exp3_frame, text="实验三  光强特性")
+
+        self.exp1 = ExperimentOneTab(exp1_frame, experiment_name="实验一")
+        self.exp2 = ExperimentOneTab(exp2_frame, experiment_name="实验二")
+        self.exp3 = ExperimentOneTab(exp3_frame, experiment_name="实验三")
 
 
 def run():
