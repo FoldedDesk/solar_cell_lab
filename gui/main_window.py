@@ -1383,50 +1383,80 @@ class ExperimentOneTab:
             self._show_toast("已记录 {}".format(label))
 
     def _measure_ui_from_experimental_data(self, x_val):
-        """实验一采集：基于实测报告数据。优先精确点，否则按 R 线性插值。"""
+        """实验采集：命中标准点直接返回；否则按报告结论反推标准结果。"""
         if self.is_distance_experiment:
             self._set_distance_value(x_val, auto_record=False)
             v_val, i_val = self._measure_ui_from_distance_data(self.distance_cm)
             return float(v_val), float(i_val)
 
-        R = x_val
+        return self._infer_standard_iv_from_report(float(x_val))
+
+    def _infer_standard_iv_from_report(self, R):
+        """实验一：按报告标准数据 + 结论(Isc/Uoc/FF/R0)反推标准结果。"""
         data = get_experimental_data()["iv_data"]
         Rs = [float(x) for x in data["R"]]
         Us = [float(x) for x in data["U"]]
         Is = [float(x) for x in data["I"]]
 
-        # 命中标准点：直接返回，保证如 7Ω -> 0.20V, 25.5mA
+        # 命中标准点：直接返回标准结果
         for r0, u0, i0 in zip(Rs, Us, Is):
             if abs(R - r0) < 1e-9:
-                return u0, i0
+                return float(u0), float(i0)
 
-        # 线性插值（按电阻排序）
+        # 非标准点：先按报告表插值
         order = np.argsort(Rs)
         Rs_s = [Rs[i] for i in order]
         Us_s = [Us[i] for i in order]
         Is_s = [Is[i] for i in order]
 
         if R <= Rs_s[0]:
-            return Us_s[0], Is_s[0]
-        if R >= Rs_s[-1]:
-            return Us_s[-1], Is_s[-1]
+            u_raw, i_raw = Us_s[0], Is_s[0]
+        elif R >= Rs_s[-1]:
+            u_raw, i_raw = Us_s[-1], Is_s[-1]
+        else:
+            u_raw, i_raw = Us_s[-1], Is_s[-1]
+            for i in range(len(Rs_s) - 1):
+                r1, r2 = Rs_s[i], Rs_s[i + 1]
+                if r1 <= R <= r2:
+                    t = (R - r1) / (r2 - r1) if r2 != r1 else 0.0
+                    u_raw = Us_s[i] + t * (Us_s[i + 1] - Us_s[i])
+                    i_raw = Is_s[i] + t * (Is_s[i + 1] - Is_s[i])
+                    break
 
-        for i in range(len(Rs_s) - 1):
-            r1, r2 = Rs_s[i], Rs_s[i + 1]
-            if r1 <= R <= r2:
-                t = (R - r1) / (r2 - r1) if r2 != r1 else 0.0
-                u = Us_s[i] + t * (Us_s[i + 1] - Us_s[i])
-                c = Is_s[i] + t * (Is_s[i + 1] - Is_s[i])
-                return float(u), float(c)
+        # 按报告结论做归一：Isc/Uoc/FF/R0
+        Isc_std = float(get_experimental_data()["Isc_mA"])
+        Uoc_std = float(get_experimental_data()["Uoc_V"])
+        FF_std = float(get_experimental_data()["FF"])
+        R0_std = float(get_experimental_data()["R0_ohm"])
 
-        return Us_s[-1], Is_s[-1]
+        Isc_tab = max(Is_s) if Is_s else Isc_std
+        Uoc_tab = max(Us_s) if Us_s else Uoc_std
+        su = (Uoc_std / Uoc_tab) if Uoc_tab > 1e-12 else 1.0
+        si = (Isc_std / Isc_tab) if Isc_tab > 1e-12 else 1.0
+        u_adj = float(u_raw) * su
+        i_adj = float(i_raw) * si
+
+        # 用 R0 与 FF 对功率峰值做局部修正，避免偏离报告结论
+        p_target = FF_std * Isc_std * Uoc_std
+        u_r0, i_r0 = self._interp_by_distance(R0_std, Rs_s, Us_s), self._interp_by_distance(R0_std, Rs_s, Is_s)
+        p_r0 = (float(u_r0) * su) * (float(i_r0) * si)
+        if p_r0 > 1e-12:
+            alpha = max(0.6, min(1.6, p_target / p_r0))
+            sigma = max(18.0, 0.25 * max(R0_std, 1.0))
+            gain = 1.0 + (alpha - 1.0) * np.exp(-((R - R0_std) / sigma) ** 2)
+            i_adj *= gain
+
+        return max(0.0, float(u_adj)), max(0.0, float(i_adj))
 
     def _measure_ui_from_distance_data(self, dist_cm):
-        """实验二采集：基于实验报告的单晶硅距离数据（Voc/Isc）。"""
+        """实验二采集：命中标准点直接返回；否则按报告数据插值反推标准结果。"""
         data = get_experimental_data()["distance_data"]
         ds = [float(x) for x in data["d_cm"]]
         vs = [float(x) for x in data["Voc_V"]]
         cs = [float(x) for x in data["Isc_mA"]]
+        for d0, v0, c0 in zip(ds, vs, cs):
+            if abs(dist_cm - d0) < 1e-9:
+                return float(v0), float(c0)
         voc = self._interp_by_distance(dist_cm, ds, vs)
         isc = self._interp_by_distance(dist_cm, ds, cs)
         return float(voc), float(isc)
@@ -1444,10 +1474,27 @@ class ExperimentOneTab:
         order = np.argsort(xs)
         xs_s = [xs[i] for i in order]
         ys_s = [ys[i] for i in order]
+        # 区间外采用外推（优先 log-log，符合距离类实验的幂律趋势），避免被边界值钳死
         if d <= xs_s[0]:
-            return ys_s[0]
+            x1, x2 = xs_s[0], xs_s[1]
+            y1, y2 = ys_s[0], ys_s[1]
+            if d <= 0:
+                d = 0.1
+            if x1 > 0 and x2 > 0 and y1 > 0 and y2 > 0:
+                k = (np.log(y2) - np.log(y1)) / (np.log(x2) - np.log(x1))
+                b = np.log(y1) - k * np.log(x1)
+                return float(np.exp(k * np.log(d) + b))
+            t = (d - x1) / (x2 - x1) if x2 != x1 else 0.0
+            return ys_s[0] + t * (ys_s[1] - ys_s[0])
         if d >= xs_s[-1]:
-            return ys_s[-1]
+            x1, x2 = xs_s[-2], xs_s[-1]
+            y1, y2 = ys_s[-2], ys_s[-1]
+            if x1 > 0 and x2 > 0 and y1 > 0 and y2 > 0:
+                k = (np.log(y2) - np.log(y1)) / (np.log(x2) - np.log(x1))
+                b = np.log(y2) - k * np.log(x2)
+                return float(np.exp(k * np.log(d) + b))
+            t = (d - x2) / (x2 - x1) if x2 != x1 else 0.0
+            return ys_s[-1] + t * (ys_s[-1] - ys_s[-2])
         for i in range(len(xs_s) - 1):
             x1, x2 = xs_s[i], xs_s[i + 1]
             if x1 <= d <= x2:
@@ -1568,8 +1615,19 @@ class ExperimentOneTab:
                         return
 
             self.data_points[row_idx][field] = new_val
-            if not self.is_distance_experiment:
-                self.data_points[row_idx]["P"] = self.data_points[row_idx]["U"] * self.data_points[row_idx]["I"]
+            # 编辑后强制按报告结论回归标准结果，保证可正确计算标准数据
+            if self.is_distance_experiment:
+                d_now = float(self.data_points[row_idx]["d"])
+                u_std, i_std = self._measure_ui_from_distance_data(d_now)
+                self.data_points[row_idx]["U"] = float(u_std)
+                self.data_points[row_idx]["I"] = float(i_std)
+                self.data_points[row_idx]["P"] = float(self._lookup_distance_light_intensity(d_now))
+            else:
+                r_now = float(self.data_points[row_idx]["R"])
+                u_std, i_std = self._infer_standard_iv_from_report(r_now)
+                self.data_points[row_idx]["U"] = float(u_std)
+                self.data_points[row_idx]["I"] = float(i_std)
+                self.data_points[row_idx]["P"] = float(u_std) * float(i_std)
 
             dp = self.data_points[row_idx]
             if self.is_distance_experiment:
