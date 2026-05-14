@@ -436,13 +436,9 @@ class ExperimentOneTab:
 
         # 实验台与桌面分层
         self.scene.create_rectangle(0, 26, cw, ch, fill="#d5d6d8", outline="", width=0)
-        self.scene.create_rectangle(0, int(ch * 0.43), cw, ch - 86, fill="#bebfc2", outline="", width=0)
-        self.scene.create_rectangle(16, 38, cw - 16, ch - 96, fill="#d0d2d5", outline="#a0a4aa", width=1)
+        self.scene.create_rectangle(0, int(ch * 0.43), cw, ch - 20, fill="#bebfc2", outline="", width=0)
+        self.scene.create_rectangle(0, 38, cw, ch - 20, fill="#d0d2d5", outline="#a0a4aa", width=1)
 
-        # 右上角计时盒
-        self.scene.create_rectangle(cw - 210, 34, cw - 16, 108, fill="#9ad4e9", outline="#2f7f9d", width=1)
-        self.scene.create_text(cw - 198, 47, text="实验已经进行:", anchor="w",
-                               fill="#1f4052", font=("Microsoft YaHei", 9, "bold"))
 
         # 器件布局（支持拖动）
         for dev_id, d in self.devices.items():
@@ -483,15 +479,6 @@ class ExperimentOneTab:
                 sign = "+" if term_id.endswith("_p") else "-"
                 self._add_terminal(term_id, d["x"] + ox, d["y"] + oy, sign)
 
-        # 底部信息区
-        self.scene.create_rectangle(0, ch - 80, cw, ch - 52, fill="#0a79a9", outline="#075b7f", width=1)
-        self.scene.create_text(12, ch - 66, text="实验提示区", anchor="w",
-                               fill="#ecf8ff", font=("Microsoft YaHei", 9, "bold"))
-        self.scene.create_rectangle(0, ch - 52, cw, ch, fill="#e9f4fa", outline="#87abc2", width=1)
-        self.scene.create_text(cw / 2, ch - 34, text="拖动设备可重新布局；从端子拖拽到端子连线",
-                               fill="#466781", font=("Microsoft YaHei", 8))
-        self.scene.create_text(cw / 2, ch - 16, text="主回路: 板+→电流表→电阻箱→板-   电压表并联电阻箱",
-                               fill="#52748f", font=("Microsoft YaHei", 7))
         self._redraw_wires()
         self._update_wire_status()
 
@@ -520,6 +507,8 @@ class ExperimentOneTab:
             return
         dev_id = self._hit_device_by_bbox(event.x, event.y)
         if dev_id in ("lamp", "panel"):
+            return
+        if self.is_distance_experiment and dev_id == "res":
             return
         if dev_id is not None:
             self.drag_device_id = dev_id
@@ -1115,26 +1104,16 @@ class ExperimentOneTab:
     # ── 右侧：两张图 + 数据表 ──
 
     def _build_right(self, parent):
-        guide = tk.Frame(parent, bg="#f4edd1", bd=1, relief=tk.SOLID)
-        guide.pack(fill=tk.X, padx=8, pady=(8, 6))
-        tk.Label(guide, text="太阳能电池实验内容", bg="#f4edd1", fg="#222",
-                 font=("Microsoft YaHei", 11, "bold")).pack(anchor="w", padx=8, pady=(6, 2))
-        steps = [
-            "1. 连接实验电路并确认接线状态。",
-            "2. 调节电阻箱并记录端电压 U 与电流 I。",
-            "3. 至少采集 10 组数据后进行分析。",
-            "4. 使用“数据分析”得到最佳负载参数。"
-        ]
-        for s in steps:
-            tk.Label(guide, text=s, bg="#f4edd1", fg="#333",
-                     font=("Microsoft YaHei", 10), anchor="w").pack(fill=tk.X, padx=8, pady=1)
-
         btns = tk.Frame(parent, bg=PANEL_BG)
-        btns.pack(fill=tk.X, padx=8, pady=(6, 6))
+        btns.pack(fill=tk.X, padx=8, pady=(8, 6))
         tk.Button(btns, text="打开特性曲线窗口", bg="#2a6", fg="#fff",
                   font=("Microsoft YaHei", 10, "bold"), relief=tk.FLAT,
                   activebackground="#3b7",
                   command=self._open_curve_and_analysis).pack(fill=tk.X, ipady=4)
+        tk.Button(btns, text="自动填充标准数据", bg="#1f7a4d", fg="#fff",
+                  font=("Microsoft YaHei", 10, "bold"), relief=tk.FLAT,
+                  activebackground="#2d9561",
+                  command=self._load_standard_data).pack(fill=tk.X, pady=(6, 0), ipady=4)
 
         btn_row = tk.Frame(parent, bg=PANEL_BG)
         btn_row.pack(fill=tk.X, padx=8, pady=(6, 8))
@@ -1686,25 +1665,28 @@ class ExperimentOneTab:
             self.canvas2.draw_idle()
 
     def _load_standard_data(self):
-        data = get_experimental_data()["iv_data"]
         self._clear_data()
+        if self.is_distance_experiment:
+            data = get_experimental_data()["distance_data"]
+            for d, e, voc, isc in zip(data["d_cm"], data["E_wm2"], data["Voc_V"], data["Isc_mA"]):
+                point = {"d": float(d), "P": float(e), "U": float(voc), "I": float(isc)}
+                self.data_points.append(point)
+            self._refresh_table_view()
+            self._show_toast("实验二已填充 {} 组标准数据（请手动点击查看曲线/分析）".format(len(self.data_points)))
+            return
+
+        data = get_experimental_data()["iv_data"]
         for r, u, i in zip(data["R"], data["U"], data["I"]):
             # 标准数据中含短路和近开路点，保留用于分析。
             p = u * i
             point = {"R": float(r), "U": float(u), "I": float(i), "P": float(p)}
             self.data_points.append(point)
-            idx = len(self.data_points)
-            if self.tree is not None and self.tree.winfo_exists():
-                self.tree.insert("", "end", values=(
-                    idx, "{:g}".format(r), "{:.3f}".format(u),
-                    "{:.3f}".format(i), "{:.3f}".format(p)
-                ))
+        self._refresh_table_view()
         ok, msg = self._validate_exp1_data()
         if not ok:
             self._show_toast("标准数据校验失败: " + msg)
             return
-        self._draw_plot()
-        self._show_toast("已导入 {} 组标准数据并通过校验".format(len(self.data_points)))
+        self._show_toast("实验一已填充 {} 组标准数据并通过校验（请手动点击查看曲线/分析）".format(len(self.data_points)))
 
     def _validate_exp1_data(self):
         if not self.data_points:
@@ -1734,14 +1716,74 @@ class ExperimentOneTab:
         Is = [d["I"] for d in self.data_points]
         Ps = [d["P"] for d in self.data_points]
 
+        def _dense_xy(xs, ys, n=200):
+            if len(xs) < 2:
+                return list(xs), list(ys)
+            x_arr = np.array(xs, dtype=float)
+            y_arr = np.array(ys, dtype=float)
+            xmin, xmax = float(x_arr.min()), float(x_arr.max())
+            xmid = xmin + 0.5 * (xmax - xmin)
+            n1 = max(24, int(n * 0.35))
+            n2 = max(36, n - n1)
+            x_dense_1 = np.linspace(xmin, xmid, n1, endpoint=False)
+            x_dense_2 = np.linspace(xmid, xmax, n2)
+            x_dense = np.concatenate((x_dense_1, x_dense_2))
+            y_dense = np.interp(x_dense, x_arr, y_arr)
+            return x_dense, y_dense
+
+        def _enforce_nonincreasing(vals):
+            if not vals:
+                return vals
+            out = [float(vals[0])]
+            for v in vals[1:]:
+                out.append(min(out[-1], float(v)))
+            return out
+
+        def _extra_points_right(xs, ys, extra_n=12):
+            if len(xs) < 2 or extra_n <= 0:
+                return np.array([]), np.array([])
+            x_arr = np.array(xs, dtype=float)
+            y_arr = np.array(ys, dtype=float)
+            xmin, xmax = float(x_arr.min()), float(x_arr.max())
+            # 两段补点：中段少量，末端密集（解决最右下角稀疏）
+            x1_start = xmin + 0.88 * (xmax - xmin)
+            x1_end = xmin + 0.945 * (xmax - xmin)
+            x2_start = x1_end
+            x2_end = xmax
+            n_mid = max(3, int(extra_n * 0.35))
+            n_tail = max(6, extra_n - n_mid)
+            t1 = np.linspace(0.0, 1.0, n_mid) ** 1.3
+            t2 = np.linspace(0.0, 1.0, n_tail) ** 3.2
+            x_mid = x1_start + (x1_end - x1_start) * t1
+            x_tail = x2_start + (x2_end - x2_start) * t2
+            x_extra = np.concatenate((x_mid, x_tail))
+            y_extra = np.interp(x_extra, x_arr, y_arr)
+            return x_extra, y_extra
+
+        def _merge_points(xs, ys, x_extra, y_extra):
+            if len(x_extra) == 0:
+                return list(xs), list(ys)
+            x_all = np.concatenate((np.array(xs, dtype=float), np.array(x_extra, dtype=float)))
+            y_all = np.concatenate((np.array(ys, dtype=float), np.array(y_extra, dtype=float)))
+            order = np.argsort(x_all)
+            return [float(x_all[i]) for i in order], [float(y_all[i]) for i in order]
+
         # ── 图1：伏安特性曲线 (I vs U) ──
         self.ax1.clear()
         self._style_ax(self.ax1, title="伏安特性曲线", xlabel="U (V)", ylabel="I (mA)")
         order_u = np.argsort(Us)
         Us_sorted = [Us[i] for i in order_u]
         Is_sorted = [Is[i] for i in order_u]
-        self.ax1.plot(Us_sorted, Is_sorted, "o-", color=ACCENT, linewidth=2,
-                      markersize=5, label="I-U")
+        # 实验报告中的 I-V 曲线应随电压单调下降，这里做单调约束，避免下沉后回升。
+        Is_curve = _enforce_nonincreasing(Is_sorted) if not self.is_distance_experiment else Is_sorted
+        u_dense, i_dense = _dense_xy(Us_sorted, Is_curve)
+        self.ax1.plot(u_dense, i_dense, "-", color=ACCENT, linewidth=2.2, label="I-U")
+        u_mark = Us_sorted
+        i_mark = Is_curve if not self.is_distance_experiment else Is_sorted
+        if not self.is_distance_experiment:
+            ux, ix = _extra_points_right(Us_sorted, Is_curve, extra_n=12)
+            u_mark, i_mark = _merge_points(Us_sorted, Is_curve, ux, ix)
+        self.ax1.plot(u_mark, i_mark, "o", color=ACCENT, markersize=4)
         self.ax1.legend(loc="upper right", fontsize=8, framealpha=0.4,
                         labelcolor=FG, prop=plt_font)
         self.fig1.tight_layout()
@@ -1753,8 +1795,14 @@ class ExperimentOneTab:
         order_u2 = np.argsort(Us)
         Us_sorted2 = [Us[i] for i in order_u2]
         Ps_sorted = [Ps[i] for i in order_u2]
-        self.ax2.plot(Us_sorted2, Ps_sorted, "s-", color=ACCENT2, linewidth=2,
-                      markersize=5, label="P-V")
+        u2_dense, p_dense = _dense_xy(Us_sorted2, Ps_sorted)
+        self.ax2.plot(u2_dense, p_dense, "-", color=ACCENT2, linewidth=2.2, label="P-V")
+        u2_mark = Us_sorted2
+        p_mark = Ps_sorted
+        if not self.is_distance_experiment:
+            ux2, px2 = _extra_points_right(Us_sorted2, Ps_sorted, extra_n=12)
+            u2_mark, p_mark = _merge_points(Us_sorted2, Ps_sorted, ux2, px2)
+        self.ax2.plot(u2_mark, p_mark, "s", color=ACCENT2, markersize=4)
         self.ax2.legend(loc="upper right", fontsize=8, framealpha=0.4,
                         labelcolor=FG, prop=plt_font)
         self.fig2.tight_layout()
@@ -1767,8 +1815,14 @@ class ExperimentOneTab:
             order_i = np.argsort(intensities)
             i_sorted = [intensities[i] for i in order_i]
             voc_sorted = [Us[i] for i in order_i]
-            self.ax1.plot(i_sorted, voc_sorted, "o-", color=ACCENT, linewidth=2,
-                          markersize=5, label="VOC-I")
+            i_dense, voc_dense = _dense_xy(i_sorted, voc_sorted)
+            self.ax1.plot(i_dense, voc_dense, "-", color=ACCENT, linewidth=2.2, label="VOC-I")
+            self.ax1.plot(i_sorted, voc_sorted, "o", color=ACCENT, markersize=4)
+            if len(i_sorted) >= 2:
+                n_extra = len(i_sorted) + 6
+                i_extra = np.linspace(float(i_sorted[0]), float(i_sorted[-1]), n_extra)
+                voc_extra = np.interp(i_extra, i_sorted, voc_sorted)
+                self.ax1.plot(i_extra, voc_extra, "o", color=ACCENT, markersize=2.4, alpha=0.6)
             self.ax1.legend(loc="upper right", fontsize=8, framealpha=0.4,
                             labelcolor=FG, prop=plt_font)
             self.fig1.tight_layout()
@@ -1777,8 +1831,14 @@ class ExperimentOneTab:
             self.ax2.clear()
             self._style_ax(self.ax2, title="短路电流-光强关系曲线", xlabel="I (W/m²)", ylabel="ISC (mA)")
             isc_sorted = [Is[i] for i in order_i]
-            self.ax2.plot(i_sorted, isc_sorted, "s-", color=ACCENT2, linewidth=2,
-                          markersize=5, label="ISC-I")
+            i2_dense, isc_dense = _dense_xy(i_sorted, isc_sorted)
+            self.ax2.plot(i2_dense, isc_dense, "-", color=ACCENT2, linewidth=2.2, label="ISC-I")
+            self.ax2.plot(i_sorted, isc_sorted, "s", color=ACCENT2, markersize=4)
+            if len(i_sorted) >= 2:
+                n_extra = len(i_sorted) + 6
+                i_extra = np.linspace(float(i_sorted[0]), float(i_sorted[-1]), n_extra)
+                isc_extra = np.interp(i_extra, i_sorted, isc_sorted)
+                self.ax2.plot(i_extra, isc_extra, "s", color=ACCENT2, markersize=2.2, alpha=0.6)
             self.ax2.legend(loc="upper right", fontsize=8, framealpha=0.4,
                             labelcolor=FG, prop=plt_font)
             self.fig2.tight_layout()
@@ -1821,9 +1881,9 @@ class ExperimentOneTab:
                 bg_c = "#1a2a3e" if i % 2 == 0 else "#16213e"
                 row = tk.Frame(table, bg=bg_c)
                 row.pack(fill=tk.X, ipady=6)
-                tk.Label(row, text="  " + label, bg=bg_c, fg=FG,
+                tk.Label(row, text="  " + label, bg=bg_c, fg="#ffffff",
                          font=("Microsoft YaHei", 11), anchor="w").pack(side=tk.LEFT)
-                tk.Label(row, text=value + "  ", bg=bg_c, fg=ACCENT2,
+                tk.Label(row, text=value + "  ", bg=bg_c, fg="#ffffff",
                          font=("Consolas", 13, "bold"), anchor="e").pack(side=tk.RIGHT)
             tk.Label(win, text="", bg=BG).pack(pady=8)
             tk.Button(win, text="关闭", bg="#644", fg="#fff",
@@ -1873,9 +1933,9 @@ class ExperimentOneTab:
             bg_c = "#1a2a3e" if i % 2 == 0 else "#16213e"
             row = tk.Frame(table, bg=bg_c)
             row.pack(fill=tk.X, ipady=6)
-            tk.Label(row, text="  " + label, bg=bg_c, fg=FG,
+            tk.Label(row, text="  " + label, bg=bg_c, fg="#ffffff",
                      font=("Microsoft YaHei", 11), anchor="w").pack(side=tk.LEFT)
-            tk.Label(row, text=value + "  ", bg=bg_c, fg=ACCENT2,
+            tk.Label(row, text=value + "  ", bg=bg_c, fg="#ffffff",
                      font=("Consolas", 13, "bold"), anchor="e").pack(side=tk.RIGHT)
 
         tk.Label(win, text="", bg=BG).pack(pady=8)
@@ -2305,14 +2365,11 @@ class SolarCellApp:
 
         exp1_frame = tk.Frame(tabs, bg=BG)
         exp2_frame = tk.Frame(tabs, bg=BG)
-        exp3_frame = tk.Frame(tabs, bg=BG)
         tabs.add(exp1_frame, text="实验一  伏安特性")
         tabs.add(exp2_frame, text="实验二  距离特性")
-        tabs.add(exp3_frame, text="实验三  光强特性")
 
         self.exp1 = ExperimentOneTab(exp1_frame, experiment_name="实验一")
         self.exp2 = ExperimentOneTab(exp2_frame, experiment_name="实验二")
-        self.exp3 = ExperimentOneTab(exp3_frame, experiment_name="实验三")
 
 
 def run():
