@@ -13,6 +13,7 @@ matplotlib.use("TkAgg")
 from matplotlib.figure import Figure
 from matplotlib.backends.backend_tkagg import FigureCanvasTkAgg
 import matplotlib.font_manager as fm
+from scipy.interpolate import PchipInterpolator
 
 # macOS/Windows 中文兼容字体回退
 plt_font = fm.FontProperties(family=[
@@ -187,6 +188,10 @@ class ExperimentOneTab:
         self.ax2 = None
         self.canvas1 = None
         self.canvas2 = None
+        self.curve_fit_mode_1 = False
+        self.curve_fit_mode_2 = False
+        self.curve_btn1 = None
+        self.curve_btn2 = None
         self.scene_size = (250, 320)
         self.devices = {
             "lamp": {"x": 72, "y": 86, "w": 104, "h": 52, "title": "大功率灯", "fill": "#3a2f1b"},
@@ -1180,17 +1185,31 @@ class ExperimentOneTab:
 
         chart_frame = tk.Frame(win, bg=BG)
         chart_frame.pack(fill=tk.BOTH, expand=True, padx=8, pady=8)
+        col1 = tk.Frame(chart_frame, bg=BG)
+        col1.pack(side=tk.LEFT, fill=tk.BOTH, expand=True, padx=(0, 4))
+        col2 = tk.Frame(chart_frame, bg=BG)
+        col2.pack(side=tk.LEFT, fill=tk.BOTH, expand=True, padx=(4, 0))
         self.fig1 = Figure(figsize=(4.5, 3.2), dpi=100, facecolor=BG)
         self.ax1 = self.fig1.add_subplot(111)
         self._style_ax(self.ax1, title="伏安特性曲线", xlabel="U (V)", ylabel="I (mA)")
-        self.canvas1 = FigureCanvasTkAgg(self.fig1, master=chart_frame)
-        self.canvas1.get_tk_widget().pack(side=tk.LEFT, fill=tk.BOTH, expand=True, padx=(0, 4))
+        self.canvas1 = FigureCanvasTkAgg(self.fig1, master=col1)
+        self.canvas1.get_tk_widget().pack(fill=tk.BOTH, expand=True)
+        self.curve_btn1 = tk.Button(col1, text="展示拟合曲线", bg="#355c9a", fg="#fff",
+                                    font=("Microsoft YaHei", 9, "bold"), relief=tk.FLAT,
+                                    activebackground="#4a73b3",
+                                    command=lambda: self._toggle_fit_curve(1))
+        self.curve_btn1.pack(fill=tk.X, pady=(6, 0), ipady=3)
 
         self.fig2 = Figure(figsize=(4.5, 3.2), dpi=100, facecolor=BG)
         self.ax2 = self.fig2.add_subplot(111)
         self._style_ax(self.ax2, title="功率输出曲线（P-V）", xlabel="U (V)", ylabel="P (mW)")
-        self.canvas2 = FigureCanvasTkAgg(self.fig2, master=chart_frame)
-        self.canvas2.get_tk_widget().pack(side=tk.LEFT, fill=tk.BOTH, expand=True, padx=(4, 0))
+        self.canvas2 = FigureCanvasTkAgg(self.fig2, master=col2)
+        self.canvas2.get_tk_widget().pack(fill=tk.BOTH, expand=True)
+        self.curve_btn2 = tk.Button(col2, text="展示拟合曲线", bg="#355c9a", fg="#fff",
+                                    font=("Microsoft YaHei", 9, "bold"), relief=tk.FLAT,
+                                    activebackground="#4a73b3",
+                                    command=lambda: self._toggle_fit_curve(2))
+        self.curve_btn2.pack(fill=tk.X, pady=(6, 0), ipady=3)
         min_points = 2 if self.is_distance_experiment else 10
         if len(self.data_points) >= min_points:
             self._draw_plot()
@@ -1200,6 +1219,9 @@ class ExperimentOneTab:
             self.fig1 = self.fig2 = None
             self.ax1 = self.ax2 = None
             self.canvas1 = self.canvas2 = None
+            self.curve_btn1 = self.curve_btn2 = None
+            self.curve_fit_mode_1 = False
+            self.curve_fit_mode_2 = False
             win.destroy()
 
         win.protocol("WM_DELETE_WINDOW", _on_close)
@@ -1208,6 +1230,13 @@ class ExperimentOneTab:
         self._open_curve_window()
         if not self.is_distance_experiment:
             self._show_analysis()
+
+    def _toggle_fit_curve(self, which):
+        if which == 1:
+            self.curve_fit_mode_1 = not self.curve_fit_mode_1
+        else:
+            self.curve_fit_mode_2 = not self.curve_fit_mode_2
+        self._draw_plot(auto_open_window=False)
 
     def _build_autowire_buttons(self, parent, pady=(6, 6)):
         box = tk.Frame(parent, bg=PANEL_BG)
@@ -1702,12 +1731,12 @@ class ExperimentOneTab:
 
     # ── 绘图（≥10 组才绘图）──
 
-    def _draw_plot(self):
+    def _draw_plot(self, auto_open_window=True):
         min_points = 2 if self.is_distance_experiment else 10
         if len(self.data_points) < min_points:
             self._show_toast("需要至少 {} 组数据才能绘图！当前 {} 组".format(min_points, len(self.data_points)))
             return
-        if self.curve_win is None or not self.curve_win.winfo_exists():
+        if (self.curve_win is None or not self.curve_win.winfo_exists()) and auto_open_window:
             self._open_curve_window()
         if self.ax1 is None or self.ax2 is None or self.canvas1 is None or self.canvas2 is None:
             return
@@ -1768,6 +1797,40 @@ class ExperimentOneTab:
             order = np.argsort(x_all)
             return [float(x_all[i]) for i in order], [float(y_all[i]) for i in order]
 
+        def _fit_smooth(xs, ys, n=320):
+            if len(xs) < 3:
+                return np.array(xs, dtype=float), np.array(ys, dtype=float)
+            x_arr = np.array(xs, dtype=float)
+            y_arr = np.array(ys, dtype=float)
+            uniq_x, uniq_idx = np.unique(x_arr, return_index=True)
+            uniq_y = y_arr[uniq_idx]
+            if len(uniq_x) < 3:
+                return uniq_x, uniq_y
+            x_dense = np.linspace(float(uniq_x.min()), float(uniq_x.max()), n)
+            try:
+                f = PchipInterpolator(uniq_x, uniq_y)
+                y_dense = f(x_dense)
+            except Exception:
+                y_dense = np.interp(x_dense, uniq_x, uniq_y)
+            return x_dense, y_dense
+
+        def _smooth_display(xs, ys, n=280):
+            if len(xs) < 3:
+                return np.array(xs, dtype=float), np.array(ys, dtype=float)
+            x_arr = np.array(xs, dtype=float)
+            y_arr = np.array(ys, dtype=float)
+            uniq_x, uniq_idx = np.unique(x_arr, return_index=True)
+            uniq_y = y_arr[uniq_idx]
+            if len(uniq_x) < 3:
+                return uniq_x, uniq_y
+            x_dense = np.linspace(float(uniq_x.min()), float(uniq_x.max()), n)
+            try:
+                f = PchipInterpolator(uniq_x, uniq_y)
+                y_dense = f(x_dense)
+            except Exception:
+                y_dense = np.interp(x_dense, uniq_x, uniq_y)
+            return x_dense, y_dense
+
         # ── 图1：伏安特性曲线 (I vs U) ──
         self.ax1.clear()
         self._style_ax(self.ax1, title="伏安特性曲线", xlabel="U (V)", ylabel="I (mA)")
@@ -1777,13 +1840,19 @@ class ExperimentOneTab:
         # 实验报告中的 I-V 曲线应随电压单调下降，这里做单调约束，避免下沉后回升。
         Is_curve = _enforce_nonincreasing(Is_sorted) if not self.is_distance_experiment else Is_sorted
         u_dense, i_dense = _dense_xy(Us_sorted, Is_curve)
-        self.ax1.plot(u_dense, i_dense, "-", color=ACCENT, linewidth=2.2, label="I-U")
+        if self.curve_fit_mode_1:
+            x_fit, y_fit = _fit_smooth(Us_sorted, Is_curve)
+            self.ax1.plot(x_fit, y_fit, "-", color=ACCENT, linewidth=2.4, label="I-U 拟合")
+        else:
+            x_show, y_show = _smooth_display(Us_sorted, Is_curve)
+            self.ax1.plot(x_show, y_show, "-", color=ACCENT, linewidth=2.2, label="I-U")
         u_mark = Us_sorted
         i_mark = Is_curve if not self.is_distance_experiment else Is_sorted
         if not self.is_distance_experiment:
             ux, ix = _extra_points_right(Us_sorted, Is_curve, extra_n=12)
             u_mark, i_mark = _merge_points(Us_sorted, Is_curve, ux, ix)
-        self.ax1.plot(u_mark, i_mark, "o", color=ACCENT, markersize=4)
+        if not self.curve_fit_mode_1:
+            self.ax1.plot(u_mark, i_mark, "o", color=ACCENT, markersize=4)
         self.ax1.legend(loc="upper right", fontsize=8, framealpha=0.4,
                         labelcolor=FG, prop=plt_font)
         self.fig1.tight_layout()
@@ -1796,13 +1865,19 @@ class ExperimentOneTab:
         Us_sorted2 = [Us[i] for i in order_u2]
         Ps_sorted = [Ps[i] for i in order_u2]
         u2_dense, p_dense = _dense_xy(Us_sorted2, Ps_sorted)
-        self.ax2.plot(u2_dense, p_dense, "-", color=ACCENT2, linewidth=2.2, label="P-V")
+        if self.curve_fit_mode_2:
+            x_fit2, y_fit2 = _fit_smooth(Us_sorted2, Ps_sorted)
+            self.ax2.plot(x_fit2, y_fit2, "-", color=ACCENT2, linewidth=2.4, label="P-V 拟合")
+        else:
+            x_show2, y_show2 = _smooth_display(Us_sorted2, Ps_sorted)
+            self.ax2.plot(x_show2, y_show2, "-", color=ACCENT2, linewidth=2.2, label="P-V")
         u2_mark = Us_sorted2
         p_mark = Ps_sorted
         if not self.is_distance_experiment:
             ux2, px2 = _extra_points_right(Us_sorted2, Ps_sorted, extra_n=12)
             u2_mark, p_mark = _merge_points(Us_sorted2, Ps_sorted, ux2, px2)
-        self.ax2.plot(u2_mark, p_mark, "s", color=ACCENT2, markersize=4)
+        if not self.curve_fit_mode_2:
+            self.ax2.plot(u2_mark, p_mark, "s", color=ACCENT2, markersize=4)
         self.ax2.legend(loc="upper right", fontsize=8, framealpha=0.4,
                         labelcolor=FG, prop=plt_font)
         self.fig2.tight_layout()
@@ -1816,13 +1891,18 @@ class ExperimentOneTab:
             i_sorted = [intensities[i] for i in order_i]
             voc_sorted = [Us[i] for i in order_i]
             i_dense, voc_dense = _dense_xy(i_sorted, voc_sorted)
-            self.ax1.plot(i_dense, voc_dense, "-", color=ACCENT, linewidth=2.2, label="VOC-I")
-            self.ax1.plot(i_sorted, voc_sorted, "o", color=ACCENT, markersize=4)
-            if len(i_sorted) >= 2:
-                n_extra = len(i_sorted) + 6
-                i_extra = np.linspace(float(i_sorted[0]), float(i_sorted[-1]), n_extra)
-                voc_extra = np.interp(i_extra, i_sorted, voc_sorted)
-                self.ax1.plot(i_extra, voc_extra, "o", color=ACCENT, markersize=2.4, alpha=0.6)
+            if self.curve_fit_mode_1:
+                x_fit, y_fit = _fit_smooth(i_sorted, voc_sorted)
+                self.ax1.plot(x_fit, y_fit, "-", color=ACCENT, linewidth=2.4, label="VOC-I 拟合")
+            else:
+                x_show, y_show = _smooth_display(i_sorted, voc_sorted)
+                self.ax1.plot(x_show, y_show, "-", color=ACCENT, linewidth=2.2, label="VOC-I")
+                self.ax1.plot(i_sorted, voc_sorted, "o", color=ACCENT, markersize=4)
+                if len(i_sorted) >= 2:
+                    n_extra = len(i_sorted) + 6
+                    i_extra = np.linspace(float(i_sorted[0]), float(i_sorted[-1]), n_extra)
+                    voc_extra = np.interp(i_extra, x_show, y_show)
+                    self.ax1.plot(i_extra, voc_extra, "o", color=ACCENT, markersize=2.4, alpha=0.6)
             self.ax1.legend(loc="upper right", fontsize=8, framealpha=0.4,
                             labelcolor=FG, prop=plt_font)
             self.fig1.tight_layout()
@@ -1832,17 +1912,27 @@ class ExperimentOneTab:
             self._style_ax(self.ax2, title="短路电流-光强关系曲线", xlabel="I (W/m²)", ylabel="ISC (mA)")
             isc_sorted = [Is[i] for i in order_i]
             i2_dense, isc_dense = _dense_xy(i_sorted, isc_sorted)
-            self.ax2.plot(i2_dense, isc_dense, "-", color=ACCENT2, linewidth=2.2, label="ISC-I")
-            self.ax2.plot(i_sorted, isc_sorted, "s", color=ACCENT2, markersize=4)
-            if len(i_sorted) >= 2:
-                n_extra = len(i_sorted) + 6
-                i_extra = np.linspace(float(i_sorted[0]), float(i_sorted[-1]), n_extra)
-                isc_extra = np.interp(i_extra, i_sorted, isc_sorted)
-                self.ax2.plot(i_extra, isc_extra, "s", color=ACCENT2, markersize=2.2, alpha=0.6)
+            if self.curve_fit_mode_2:
+                x_fit2, y_fit2 = _fit_smooth(i_sorted, isc_sorted)
+                self.ax2.plot(x_fit2, y_fit2, "-", color=ACCENT2, linewidth=2.4, label="ISC-I 拟合")
+            else:
+                x_show2, y_show2 = _smooth_display(i_sorted, isc_sorted)
+                self.ax2.plot(x_show2, y_show2, "-", color=ACCENT2, linewidth=2.2, label="ISC-I")
+                self.ax2.plot(i_sorted, isc_sorted, "s", color=ACCENT2, markersize=4)
+                if len(i_sorted) >= 2:
+                    n_extra = len(i_sorted) + 6
+                    i_extra = np.linspace(float(i_sorted[0]), float(i_sorted[-1]), n_extra)
+                    isc_extra = np.interp(i_extra, i_sorted, isc_sorted)
+                    self.ax2.plot(i_extra, isc_extra, "s", color=ACCENT2, markersize=2.2, alpha=0.6)
             self.ax2.legend(loc="upper right", fontsize=8, framealpha=0.4,
                             labelcolor=FG, prop=plt_font)
             self.fig2.tight_layout()
             self.canvas2.draw_idle()
+
+        if self.curve_btn1 is not None and self.curve_btn1.winfo_exists():
+            self.curve_btn1.config(text="恢复原始图像" if self.curve_fit_mode_1 else "展示拟合曲线")
+        if self.curve_btn2 is not None and self.curve_btn2.winfo_exists():
+            self.curve_btn2.config(text="恢复原始图像" if self.curve_fit_mode_2 else "展示拟合曲线")
 
     # ── 数据分析弹窗 ──
 
