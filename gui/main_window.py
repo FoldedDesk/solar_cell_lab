@@ -14,6 +14,7 @@ from matplotlib.figure import Figure
 from matplotlib.backends.backend_tkagg import FigureCanvasTkAgg
 import matplotlib.font_manager as fm
 from scipy.interpolate import PchipInterpolator
+from PIL import Image, ImageTk
 
 # macOS/Windows 中文兼容字体回退
 plt_font = fm.FontProperties(family=[
@@ -215,6 +216,9 @@ class ExperimentOneTab:
         self.ax2 = None
         self.canvas1 = None
         self.canvas2 = None
+        self._asset_src = {}
+        self._asset_cache = {}
+        self._asset_tk_refs = {}
         self.curve_fit_mode_1 = False
         self.curve_fit_mode_2 = False
         self.curve_btn1 = None
@@ -223,17 +227,52 @@ class ExperimentOneTab:
         self.devices = {
             "lamp": {"x": 72, "y": 86, "w": 104, "h": 52, "title": "大功率灯", "fill": "#3a2f1b"},
             "panel": {"x": 404, "y": 72, "w": 122, "h": 78, "title": "太阳能板", "fill": "#17324a"},
-            "amm": {"x": 96, "y": 292, "w": 96, "h": 56, "title": "电流表", "fill": "#1f3f2b"},
-            "res": {"x": 478, "y": 304, "w": 104, "h": 56, "title": "电阻箱", "fill": "#40291f"},
-            "vol": {"x": 284, "y": 486, "w": 142, "h": 64, "title": "电压表", "fill": "#33295a"},
+            "amm": {"x": 96, "y": 282, "w": 96, "h": 96, "title": "电流表", "fill": "#1f3f2b"},
+            "res": {"x": 478, "y": 282, "w": 96, "h": 96, "title": "电阻箱", "fill": "#40291f"},
+            "vol": {"x": 284, "y": 456, "w": 96, "h": 96, "title": "电压表", "fill": "#33295a"},
         }
         self.device_term_offsets = {
             "panel": {"panel_p": (0, 22), "panel_n": (122, 48)},
-            "amm": {"amm_p": (0, 20), "amm_n": (96, 42)},
-            "res": {"res_p": (0, 20), "res_n": (104, 38)},
-            "vol": {"vol_p": (0, 6), "vol_n": (142, 28)},
         }
+        self.device_icon_bounds = {}
+        self._load_scene_assets()
         self._build()
+
+    def _load_scene_assets(self):
+        base = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "res")
+        mapping = {
+            "amm": os.path.join(base, "ammeter_256.png"),
+            "vol": os.path.join(base, "voltmeter_256.png"),
+            "res": os.path.join(base, "resistance_box_256.png"),
+        }
+        for k, p in mapping.items():
+            if os.path.exists(p):
+                try:
+                    self._asset_src[k] = Image.open(p).convert("RGBA")
+                except Exception:
+                    pass
+
+    def _get_device_asset(self, key, w, h):
+        if key not in self._asset_src:
+            return None
+        size_key = (key, int(w), int(h))
+        if size_key in self._asset_tk_refs:
+            return self._asset_tk_refs[size_key]
+        src = self._asset_src[key]
+        tw, th = int(w), int(h)
+        sw, sh = src.size
+        scale = min(tw / max(sw, 1), th / max(sh, 1))
+        nw = max(1, int(sw * scale))
+        nh = max(1, int(sh * scale))
+        fitted = src.resize((nw, nh), Image.Resampling.LANCZOS)
+        # 等比缩放后居中贴到目标画布，避免任何方向拉伸
+        img = Image.new("RGBA", (tw, th), (0, 0, 0, 0))
+        ox = (tw - nw) // 2
+        oy = (th - nh) // 2
+        img.paste(fitted, (ox, oy), fitted)
+        tk_img = ImageTk.PhotoImage(img)
+        self._asset_tk_refs[size_key] = tk_img
+        return tk_img
 
     def _build(self):
         body = tk.Frame(self.frame, bg=BG)
@@ -442,6 +481,7 @@ class ExperimentOneTab:
         self.drag_line_id = None
         self.drag_device_id = None
         self.drag_device_last_xy = None
+        self.device_icon_bounds.clear()
 
         cw, ch = self.scene_size
         # 顶部蓝色标题条（参考示例 UI）
@@ -479,21 +519,58 @@ class ExperimentOneTab:
         amm = self.devices["amm"]
         res = self.devices["res"]
         vol = self.devices["vol"]
-        self.scene.create_oval(amm["x"] + 14, amm["y"] + 10, amm["x"] + 58, amm["y"] + 44,
-                               fill="#0e1e18", outline="#6dd39b", width=1)
-        self.scene.create_text(amm["x"] + 36, amm["y"] + 28, text="A", fill="#8df0bf", font=("Consolas", 9, "bold"))
-        self.scene.create_rectangle(res["x"] + 14, res["y"] + 14, res["x"] + 78, res["y"] + 34,
-                                    fill="#0f131d", outline="#ff9f5f", width=1)
-        self.scene.create_text(res["x"] + 46, res["y"] + 24, text="R BOX", fill="#ffb27f", font=("Consolas", 8, "bold"))
-        self.scene.create_oval(vol["x"] + 18, vol["y"] + 12, vol["x"] + 60, vol["y"] + 46,
-                               fill="#1b1836", outline="#9c8cff", width=1)
-        self.scene.create_text(vol["x"] + 39, vol["y"] + 29, text="V", fill="#b9abff", font=("Consolas", 9, "bold"))
+        # 用资源图替换电流表/电压表/电阻箱细节（优先）
+        # 图标区固定为设备内部“正方形”区域并等比居中，避免任何方向拉伸
+        def _draw_square_icon(dev_id, dev, key, fallback_draw_fn):
+            icon_size = max(20, min(int(dev["w"] - 10), int(dev["h"] - 20)))
+            icon_x = dev["x"] + (dev["w"] - icon_size) / 2
+            icon_y = dev["y"] + 16 + max(0, (dev["h"] - 16 - icon_size) / 2)
+            self.device_icon_bounds[dev_id] = (icon_x, icon_y, icon_size)
+            icon = self._get_device_asset(key, icon_size, icon_size)
+            if icon is not None:
+                self.scene.create_image(icon_x, icon_y, anchor="nw", image=icon, tags=("device",))
+            else:
+                fallback_draw_fn()
 
+        def _draw_amm_fallback():
+            self.scene.create_oval(amm["x"] + 14, amm["y"] + 10, amm["x"] + 58, amm["y"] + 44,
+                                   fill="#0e1e18", outline="#6dd39b", width=1)
+            self.scene.create_text(amm["x"] + 36, amm["y"] + 28, text="A", fill="#8df0bf", font=("Consolas", 9, "bold"))
+
+        def _draw_res_fallback():
+            self.scene.create_rectangle(res["x"] + 14, res["y"] + 14, res["x"] + 78, res["y"] + 34,
+                                        fill="#0f131d", outline="#ff9f5f", width=1)
+            self.scene.create_text(res["x"] + 46, res["y"] + 24, text="R BOX", fill="#ffb27f", font=("Consolas", 8, "bold"))
+
+        def _draw_vol_fallback():
+            self.scene.create_oval(vol["x"] + 18, vol["y"] + 12, vol["x"] + 60, vol["y"] + 46,
+                                   fill="#1b1836", outline="#9c8cff", width=1)
+            self.scene.create_text(vol["x"] + 39, vol["y"] + 29, text="V", fill="#b9abff", font=("Consolas", 9, "bold"))
+
+        _draw_square_icon("amm", amm, "amm", _draw_amm_fallback)
+        _draw_square_icon("res", res, "res", _draw_res_fallback)
+        _draw_square_icon("vol", vol, "vol", _draw_vol_fallback)
+
+        # 太阳能板端子仍保持设备边缘；仪表与电阻箱端子贴合图标端子位置
         for dev_id, m in self.device_term_offsets.items():
             d = self.devices[dev_id]
             for term_id, (ox, oy) in m.items():
                 sign = "+" if term_id.endswith("_p") else "-"
                 self._add_terminal(term_id, d["x"] + ox, d["y"] + oy, sign)
+
+        icon_terms = {
+            "amm": {"amm_p": (0.22, 0.80), "amm_n": (0.78, 0.80)},
+            "vol": {"vol_p": (0.22, 0.80), "vol_n": (0.78, 0.80)},
+            # 电阻箱端子对齐到底部三个小圆点中的左右两点
+            "res": {"res_p": (0.26, 0.80), "res_n": (0.74, 0.80)},
+        }
+        for dev_id, tmap in icon_terms.items():
+            if dev_id not in self.device_icon_bounds:
+                continue
+            ix, iy, isz = self.device_icon_bounds[dev_id]
+            for term_id, (rx, ry) in tmap.items():
+                sign = "+" if term_id.endswith("_p") else "-"
+                self._add_terminal(term_id, ix + isz * rx, iy + isz * ry, sign)
 
         self._redraw_wires()
         self._update_wire_status()
@@ -802,6 +879,73 @@ class ExperimentOneTab:
                 d += 1
         return d
 
+    def _point_device_id(self, term_id):
+        if "_" not in term_id:
+            return None
+        return term_id.split("_", 1)[0]
+
+    def _line_hits_rect(self, x1, y1, x2, y2, rect):
+        rx1, ry1, rx2, ry2 = rect
+        # 仅处理横/竖线段（本函数用于折线路径检查）
+        if abs(y1 - y2) < 1e-6:
+            y = y1
+            if y <= ry1 or y >= ry2:
+                return False
+            a, b = sorted((x1, x2))
+            return not (b <= rx1 or a >= rx2)
+        if abs(x1 - x2) < 1e-6:
+            x = x1
+            if x <= rx1 or x >= rx2:
+                return False
+            a, b = sorted((y1, y2))
+            return not (b <= ry1 or a >= ry2)
+        return False
+
+    def _polyline_hits_rects(self, pts, rects):
+        for i in range(len(pts) - 1):
+            x1, y1 = pts[i]
+            x2, y2 = pts[i + 1]
+            for rect in rects:
+                if self._line_hits_rect(x1, y1, x2, y2, rect):
+                    return True
+        return False
+
+    def _build_wire_polyline(self, a, b, x1, y1, x2, y2):
+        # 先尝试简单 L 形，再尝试上下左右绕行，尽量避开仪器
+        dev_a = self._point_device_id(a)
+        dev_b = self._point_device_id(b)
+        margin = 10
+        rects = []
+        for dev_id, d in self.devices.items():
+            if dev_id in (dev_a, dev_b, "lamp"):
+                continue
+            rects.append((d["x"] - margin, d["y"] - margin, d["x"] + d["w"] + margin, d["y"] + d["h"] + margin))
+
+        p_hv = [(x1, y1), (x2, y1), (x2, y2)]
+        p_vh = [(x1, y1), (x1, y2), (x2, y2)]
+        if not self._polyline_hits_rects(p_hv, rects):
+            return p_hv
+        if not self._polyline_hits_rects(p_vh, rects):
+            return p_vh
+
+        cw, ch = self.scene_size
+        # 多给几条候选走廊：上、下、左、右
+        y_top = 42
+        y_bot = ch - 34
+        x_left = 24
+        x_right = cw - 24
+        candidates = [
+            [(x1, y1), (x1, y_top), (x2, y_top), (x2, y2)],
+            [(x1, y1), (x1, y_bot), (x2, y_bot), (x2, y2)],
+            [(x1, y1), (x_left, y1), (x_left, y2), (x2, y2)],
+            [(x1, y1), (x_right, y1), (x_right, y2), (x2, y2)],
+        ]
+        for pts in candidates:
+            if not self._polyline_hits_rects(pts, rects):
+                return pts
+        # 兜底：返回较自然的 L 形
+        return p_hv if abs(x2 - x1) >= abs(y2 - y1) else p_vh
+
     def _redraw_wires(self):
         if self.scene is None or not self.scene.winfo_exists():
             return
@@ -809,7 +953,6 @@ class ExperimentOneTab:
         for a, b in self.wires:
             x1, y1 = self.term_pos[a]
             x2, y2 = self.term_pos[b]
-            # 导线只表达“端子 A 连到端子 B”，不额外画转折点。
             self.scene.create_line(
                 x1, y1, x2, y2,
                 fill="#6a2a14", width=5.2,
