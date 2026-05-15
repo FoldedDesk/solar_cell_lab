@@ -38,12 +38,12 @@ GRID_COLOR = "#8da0b1"
 def configure_ttk_theme(root):
     """统一 ttk 在 Windows/macOS 的可读性，避免 mac 下白底浅字。"""
     style = ttk.Style(root)
-    if sys.platform == "darwin":
-        # macOS 的 Aqua 主题会忽略部分颜色设置，改用 clam 可控性更好
-        try:
-            style.theme_use("clam")
-        except Exception:
-            pass
+    # Windows 的 vista/xpnative 主题常忽略按钮背景，但会吃前景色，容易出现白底白字。
+    # 统一使用 clam，确保跨平台颜色样式一致可控。
+    try:
+        style.theme_use("clam")
+    except Exception:
+        pass
 
     style.configure(".", background=BG, foreground=FG)
     style.configure("TFrame", background=BG)
@@ -59,12 +59,24 @@ def configure_ttk_theme(root):
     style.configure("Treeview.Heading", background=PANEL_BG, foreground="#12283d")
     style.map("Treeview", background=[("selected", "#cddff0")], foreground=[("selected", "#111")])
     # 彩色按钮样式（跨平台可控）
-    style.configure("Primary.TButton", background="#2a6", foreground="#ffffff", padding=(10, 6), borderwidth=0)
-    style.map("Primary.TButton", background=[("active", "#3b7")], foreground=[("active", "#ffffff")])
-    style.configure("Info.TButton", background="#2266cc", foreground="#ffffff", padding=(10, 6), borderwidth=0)
-    style.map("Info.TButton", background=[("active", "#3377dd")], foreground=[("active", "#ffffff")])
-    style.configure("Assist.TButton", background="#4455aa", foreground="#ffffff", padding=(10, 6), borderwidth=0)
-    style.map("Assist.TButton", background=[("active", "#5566bb")], foreground=[("active", "#ffffff")])
+    style.configure("Primary.TButton", background="#2a6", foreground="#ffffff", padding=(10, 6), borderwidth=1)
+    style.map(
+        "Primary.TButton",
+        background=[("active", "#3b7"), ("disabled", "#b9d8c7")],
+        foreground=[("disabled", "#5f6b63"), ("!disabled", "#ffffff")],
+    )
+    style.configure("Info.TButton", background="#2266cc", foreground="#ffffff", padding=(10, 6), borderwidth=1)
+    style.map(
+        "Info.TButton",
+        background=[("active", "#3377dd"), ("disabled", "#bfd0ec")],
+        foreground=[("disabled", "#5a6472"), ("!disabled", "#ffffff")],
+    )
+    style.configure("Assist.TButton", background="#4455aa", foreground="#ffffff", padding=(10, 6), borderwidth=1)
+    style.map(
+        "Assist.TButton",
+        background=[("active", "#5566bb"), ("disabled", "#c6cce4")],
+        foreground=[("disabled", "#5a6070"), ("!disabled", "#ffffff")],
+    )
 
 
 def solve_operating_point(params, R_ohm):
