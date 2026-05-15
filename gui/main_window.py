@@ -6,7 +6,7 @@
 """
 
 import tkinter as tk
-from tkinter import ttk
+from tkinter import ttk, filedialog, messagebox
 import numpy as np
 import matplotlib
 matplotlib.use("TkAgg")
@@ -137,14 +137,10 @@ class _ManualInputDialog:
         # 按钮
         bf = tk.Frame(self.top, bg=BG)
         bf.pack(fill=tk.X, padx=30, pady=(12, 0))
-        tk.Button(bf, text="确认", bg="#2a6", fg="#fff",
-                  font=("Microsoft YaHei", 11, "bold"), relief=tk.FLAT,
-                  activebackground="#3b7", width=10,
-                  command=self._ok).pack(side=tk.LEFT, expand=True, padx=4)
-        tk.Button(bf, text="取消", bg="#644", fg="#fff",
-                  font=("Microsoft YaHei", 11), relief=tk.FLAT,
-                  activebackground="#855", width=10,
-                  command=self._cancel).pack(side=tk.LEFT, expand=True, padx=4)
+        ttk.Button(bf, text="确认", style="Primary.TButton",
+                   command=self._ok).pack(side=tk.LEFT, expand=True, padx=4)
+        ttk.Button(bf, text="取消", style="Assist.TButton",
+                   command=self._cancel).pack(side=tk.LEFT, expand=True, padx=4)
 
         self.top.bind("<Escape>", lambda e: self._cancel())
 
@@ -314,34 +310,26 @@ class ExperimentOneTab:
                      font=("Microsoft YaHei", 10, "bold")).pack(anchor="w")
             mode_btns = tk.Frame(mode_box, bg=PANEL_BG)
             mode_btns.pack(fill=tk.X, pady=(2, 0))
-            tk.Button(mode_btns, text="测短路电流 Isc", bg="#8a5a00", fg="#fff",
-                      font=("Microsoft YaHei", 9, "bold"), relief=tk.FLAT,
-                      command=lambda: self._set_exp2_measure_mode("isc")).pack(side=tk.LEFT, expand=True, fill=tk.X, padx=(0, 4), ipady=2)
-            tk.Button(mode_btns, text="测开路电压 Voc", bg="#005a8a", fg="#fff",
-                      font=("Microsoft YaHei", 9, "bold"), relief=tk.FLAT,
-                      command=lambda: self._set_exp2_measure_mode("voc")).pack(side=tk.LEFT, expand=True, fill=tk.X, padx=(4, 0), ipady=2)
+            ttk.Button(mode_btns, text="测短路电流 Isc", style="Assist.TButton",
+                       command=lambda: self._set_exp2_measure_mode("isc")).pack(side=tk.LEFT, expand=True, fill=tk.X, padx=(0, 4), ipady=1)
+            ttk.Button(mode_btns, text="测开路电压 Voc", style="Assist.TButton",
+                       command=lambda: self._set_exp2_measure_mode("voc")).pack(side=tk.LEFT, expand=True, fill=tk.X, padx=(4, 0), ipady=1)
 
         # 操作按钮
         record_btn_text = "【实验二】点击记录当前数据" if self.is_distance_experiment else "● 自动采集并记录"
-        tk.Button(parent, text=record_btn_text,
-                  bg=ACCENT, fg="#fff", font=("Microsoft YaHei", 11, "bold"),
-                  activebackground="#ff8855", relief=tk.FLAT,
-                  command=self._record_point).pack(fill=tk.X, padx=10, pady=4, ipady=4)
+        ttk.Button(parent, text=record_btn_text, style="Primary.TButton",
+                   command=self._record_point).pack(fill=tk.X, padx=10, pady=4, ipady=2)
 
         btn_frame = tk.Frame(parent, bg=PANEL_BG)
         btn_frame.pack(fill=tk.X, padx=10, pady=4)
 
-        tk.Button(parent, text="数据分析", bg="#2266cc", fg="#fff",
-                  font=("Microsoft YaHei", 11, "bold"),
-                  activebackground="#3377dd", relief=tk.FLAT,
-                  command=self._show_analysis).pack(fill=tk.X, padx=10, pady=6, ipady=4)
+        ttk.Button(parent, text="数据分析", style="Info.TButton",
+                   command=self._show_analysis).pack(fill=tk.X, padx=10, pady=6, ipady=2)
 
         ttk.Separator(parent, orient="horizontal").pack(fill=tk.X, padx=10, pady=6)
 
-        tk.Button(parent, text="打开实验台（独立页面）", bg="#355c9a", fg="#fff",
-                  font=("Microsoft YaHei", 10, "bold"), relief=tk.FLAT,
-                  activebackground="#4a73b3",
-                  command=self._open_lab_window).pack(fill=tk.X, padx=10, pady=(2, 6), ipady=3)
+        ttk.Button(parent, text="打开实验台（独立页面）", style="Assist.TButton",
+                   command=self._open_lab_window).pack(fill=tk.X, padx=10, pady=(2, 6), ipady=1)
 
     def _build_wiring_scene(self, parent, large=False, show_button=True):
         tk.Label(parent, text="━━━ 实验接线场景 ━━━", bg=BG, fg="#114a76",
@@ -360,10 +348,8 @@ class ExperimentOneTab:
         self.scene.bind("<ButtonRelease-1>", self._on_scene_release)
         self.scene.bind("<Double-Button-1>", self._on_scene_double_click)
         if show_button:
-            tk.Button(parent, text="一键连线", bg="#4455aa", fg="#fff",
-                      font=("Microsoft YaHei", 9, "bold"),
-                      activebackground="#5566bb", relief=tk.FLAT,
-                      command=self._auto_wire_for_test).pack(fill=tk.X, padx=10, pady=(2, 4), ipady=2)
+            ttk.Button(parent, text="一键连线", style="Assist.TButton",
+                       command=self._auto_wire_for_test).pack(fill=tk.X, padx=10, pady=(2, 4), ipady=1)
         timer_bar = tk.Frame(parent, bg=PANEL_BG)
         timer_bar.pack(fill=tk.X, padx=10, pady=(2, 6))
         tk.Label(timer_bar, text="实验已经进行:", bg=PANEL_BG, fg="#ba2f2f",
@@ -689,10 +675,8 @@ class ExperimentOneTab:
         self._update_distance_reading_preview(self.distance_cm)
 
         if self.is_distance_experiment:
-            tk.Button(body, text="【实验二】记录当前数据", bg=ACCENT, fg="#fff",
-                      font=("Microsoft YaHei", 10, "bold"), relief=tk.FLAT,
-                      activebackground="#ff8855",
-                      command=self._record_point).pack(fill=tk.X, pady=(10, 0), ipady=3)
+            ttk.Button(body, text="【实验二】记录当前数据", style="Primary.TButton",
+                       command=self._record_point).pack(fill=tk.X, pady=(10, 0), ipady=1)
 
         dlg.protocol("WM_DELETE_WINDOW", self._close_distance_dialog)
 
@@ -804,10 +788,10 @@ class ExperimentOneTab:
 
         btns = tk.Frame(dlg, bg=BG)
         btns.pack(fill=tk.X, padx=24, pady=16)
-        tk.Button(btns, text="确认", bg="#2a6", fg="#fff", relief=tk.FLAT,
-                  font=("Microsoft YaHei", 10, "bold"), command=_submit).pack(side=tk.LEFT, expand=True, padx=4)
-        tk.Button(btns, text="取消", bg="#644", fg="#fff", relief=tk.FLAT,
-                  font=("Microsoft YaHei", 10), command=dlg.destroy).pack(side=tk.LEFT, expand=True, padx=4)
+        ttk.Button(btns, text="确认", style="Primary.TButton",
+                   command=_submit).pack(side=tk.LEFT, expand=True, padx=4)
+        ttk.Button(btns, text="取消", style="Assist.TButton",
+                   command=dlg.destroy).pack(side=tk.LEFT, expand=True, padx=4)
         dlg.bind("<Return>", lambda _e: _submit())
         dlg.bind("<Escape>", lambda _e: dlg.destroy())
 
@@ -1035,15 +1019,13 @@ class ExperimentOneTab:
             col.pack(side=tk.LEFT, padx=1)
             tk.Label(col, text=lbl, bg="#2b2b2b", fg="#aaa",
                      font=("Consolas", 7)).pack()
-            tk.Button(col, text="▲", width=2, bg="#444", fg="#fff",
-                      font=("Consolas", 8), relief=tk.FLAT,
-                      command=lambda idx=i: self._r_digit_inc(idx)).pack(pady=1)
+            ttk.Button(col, text="▲", style="Assist.TButton",
+                       command=lambda idx=i: self._r_digit_inc(idx)).pack(pady=1)
             digit_lbl = tk.Label(col, text="0", bg="#1a1a1a", fg="#ff6b35",
                                  width=2, font=("Consolas", 13, "bold"))
             digit_lbl.pack(pady=1)
-            tk.Button(col, text="▼", width=2, bg="#444", fg="#fff",
-                      font=("Consolas", 8), relief=tk.FLAT,
-                      command=lambda idx=i: self._r_digit_dec(idx)).pack(pady=1)
+            ttk.Button(col, text="▼", style="Assist.TButton",
+                       command=lambda idx=i: self._r_digit_dec(idx)).pack(pady=1)
             self.r_digits.append(digit_lbl)
 
         # 总电阻显示
@@ -1066,10 +1048,8 @@ class ExperimentOneTab:
         r_manual_entry.bind("<Return>", self._on_r_manual_enter)
         tk.Label(manual_f, text="Ω", bg="#1e1e1e", fg="#aaa",
                  font=("Consolas", 9)).pack(side=tk.LEFT)
-        tk.Button(manual_f, text="设定", bg="#335", fg="#fff",
-                  font=("Microsoft YaHei", 8), relief=tk.FLAT, padx=6,
-                  activebackground="#446",
-                  command=lambda: self._on_r_manual_enter(None)).pack(side=tk.LEFT, padx=2)
+        ttk.Button(manual_f, text="设定", style="Assist.TButton",
+                   command=lambda: self._on_r_manual_enter(None)).pack(side=tk.LEFT, padx=2)
 
     # ── 电阻箱旋钮操作 ──
 
@@ -1136,9 +1116,10 @@ class ExperimentOneTab:
         btns = tk.Frame(parent, bg=PANEL_BG)
         btns.pack(fill=tk.X, padx=8, pady=(8, 6))
         ttk.Button(btns, text="打开特性曲线窗口", style="Primary.TButton",
-                   command=self._open_curve_and_analysis).pack(fill=tk.X, ipady=2)
-        ttk.Button(btns, text="自动填充标准数据", style="Info.TButton",
-                   command=self._load_standard_data).pack(fill=tk.X, pady=(6, 0), ipady=2)
+                   command=self._open_curve_window).pack(fill=tk.X, ipady=2)
+        if not self.is_distance_experiment:
+            ttk.Button(btns, text="数据分析", style="Info.TButton",
+                       command=self._show_analysis).pack(fill=tk.X, pady=(6, 0), ipady=2)
 
         btn_row = tk.Frame(parent, bg=PANEL_BG)
         btn_row.pack(fill=tk.X, padx=8, pady=(6, 8))
@@ -1162,10 +1143,8 @@ class ExperimentOneTab:
         hdr.pack(fill=tk.X, padx=8, pady=(8, 4))
         tk.Label(hdr, text="实验数据记录", bg=PANEL_BG, fg=ACCENT,
                  font=("Microsoft YaHei", 11, "bold")).pack(side=tk.LEFT)
-        tk.Button(hdr, text="删除选中行", bg="#644", fg="#fff",
-                  font=("Microsoft YaHei", 9), relief=tk.FLAT,
-                  activebackground="#855",
-                  command=self._delete_selected).pack(side=tk.RIGHT, padx=4)
+        ttk.Button(hdr, text="删除选中行", style="Assist.TButton",
+                   command=self._delete_selected).pack(side=tk.RIGHT, padx=4)
 
         table_frame = tk.Frame(win, bg=PANEL_BG)
         table_frame.pack(fill=tk.BOTH, expand=True, padx=8, pady=(0, 8))
@@ -1253,20 +1232,8 @@ class ExperimentOneTab:
         self._draw_plot(auto_open_window=False)
 
     def _build_autowire_buttons(self, parent, pady=(6, 6)):
-        box = tk.Frame(parent, bg=PANEL_BG)
-        box.pack(fill=tk.X, padx=8, pady=pady)
-        tk.Label(box, text="接线辅助", bg=PANEL_BG, fg=ACCENT,
-                 font=("Microsoft YaHei", 10, "bold")).pack(anchor="w", pady=(0, 4))
-        if self.is_distance_experiment:
-            row = tk.Frame(box, bg=PANEL_BG)
-            row.pack(fill=tk.X)
-            ttk.Button(row, text="一键连线 Isc", style="Assist.TButton",
-                       command=self._auto_wire_exp2_isc).pack(side=tk.LEFT, expand=True, fill=tk.X, padx=(0, 3), ipady=1)
-            ttk.Button(row, text="一键连线 Voc", style="Assist.TButton",
-                       command=self._auto_wire_exp2_voc).pack(side=tk.LEFT, expand=True, fill=tk.X, padx=(3, 0), ipady=1)
-        else:
-            ttk.Button(box, text="一键连线", style="Assist.TButton",
-                       command=self._auto_wire_for_test).pack(fill=tk.X, ipady=2)
+        # 主页不再显示接线/导入快捷按钮，统一放到顶部“工具箱”
+        return
 
     def _refresh_table_view(self):
         if self.tree is None or not self.tree.winfo_exists():
@@ -1669,10 +1636,10 @@ class ExperimentOneTab:
 
         btns = tk.Frame(dlg, bg=BG)
         btns.pack(fill=tk.X, padx=24, pady=16)
-        tk.Button(btns, text="确认", bg="#2a6", fg="#fff", relief=tk.FLAT,
-                  font=("Microsoft YaHei", 10, "bold"), command=submit).pack(side=tk.LEFT, expand=True, padx=4)
-        tk.Button(btns, text="取消", bg="#644", fg="#fff", relief=tk.FLAT,
-                  font=("Microsoft YaHei", 10), command=dlg.destroy).pack(side=tk.LEFT, expand=True, padx=4)
+        ttk.Button(btns, text="确认", style="Primary.TButton",
+                   command=submit).pack(side=tk.LEFT, expand=True, padx=4)
+        ttk.Button(btns, text="取消", style="Assist.TButton",
+                   command=dlg.destroy).pack(side=tk.LEFT, expand=True, padx=4)
         dlg.bind("<Return>", lambda _e: submit())
         dlg.bind("<Escape>", lambda _e: dlg.destroy())
 
@@ -1984,10 +1951,8 @@ class ExperimentOneTab:
                 tk.Label(row, text=value + "  ", bg=bg_c, fg="#ffffff",
                          font=("Consolas", 13, "bold"), anchor="e").pack(side=tk.RIGHT)
             tk.Label(win, text="", bg=BG).pack(pady=8)
-            tk.Button(win, text="关闭", bg="#644", fg="#fff",
-                      font=("Microsoft YaHei", 10), relief=tk.FLAT,
-                      activebackground="#855",
-                      command=win.destroy).pack(ipady=4, padx=20)
+            ttk.Button(win, text="关闭", style="Assist.TButton",
+                       command=win.destroy).pack(ipady=2, padx=20)
             return
 
         # 仅使用已记录实测点做分析，不做任何拟合/外推：
@@ -2037,16 +2002,167 @@ class ExperimentOneTab:
                      font=("Consolas", 13, "bold"), anchor="e").pack(side=tk.RIGHT)
 
         tk.Label(win, text="", bg=BG).pack(pady=8)
-        tk.Button(win, text="关闭", bg="#644", fg="#fff",
-                  font=("Microsoft YaHei", 10), relief=tk.FLAT,
-                  activebackground="#855",
-                  command=win.destroy).pack(ipady=4, padx=20)
+        ttk.Button(win, text="关闭", style="Assist.TButton",
+                   command=win.destroy).pack(ipady=2, padx=20)
 
     def _get_current_params(self):
         p = dict(self.params)
         base_Iph = DEFAULT_PARAMS["single"]["Iph"]
         p["Iph"] = base_Iph * (self.light_intensity / 1000.0)
         return p
+
+    def export_data_excel(self):
+        if not self.data_points:
+            messagebox.showinfo("提示", f"{self.experiment_name}暂无可导出数据")
+            return
+        path = filedialog.asksaveasfilename(
+            title=f"导出{self.experiment_name}数据",
+            defaultextension=".xlsx",
+            filetypes=[("Excel 文件", "*.xlsx")],
+            initialfile=f"{self.experiment_name}_数据.xlsx",
+        )
+        if not path:
+            return
+        try:
+            from openpyxl import Workbook
+        except Exception:
+            messagebox.showerror("错误", "缺少 openpyxl，请先安装：pip install openpyxl")
+            return
+
+        wb = Workbook()
+        ws = wb.active
+        ws.title = "数据"
+        if self.is_distance_experiment:
+            headers = ["序号", "d(cm)", "I(W/m²)", "Voc(V)", "Isc(mA)"]
+            ws.append(headers)
+            rows = sorted(self.data_points, key=lambda d: d["d"])
+            for i, dp in enumerate(rows, start=1):
+                ws.append([i, dp["d"], dp["P"], dp["U"], dp["I"]])
+        else:
+            headers = ["序号", "R(Ω)", "U(V)", "I(mA)", "P(mW)"]
+            ws.append(headers)
+            rows = sorted(self.data_points, key=lambda d: d["R"])
+            for i, dp in enumerate(rows, start=1):
+                ws.append([i, dp["R"], dp["U"], dp["I"], dp["P"]])
+            # 实验一额外附加数据分析结果
+            if len(self.data_points) >= 10:
+                ana = wb.create_sheet("数据分析")
+                best_idx = self._best_point_index()
+                best = self.data_points[best_idx]
+                nonzero_r = [d for d in self.data_points if d["R"] > 0]
+                max_r_point = max(nonzero_r, key=lambda d: d["R"]) if nonzero_r else max(self.data_points, key=lambda d: d["U"])
+                min_r_point = min(self.data_points, key=lambda d: d["R"])
+                Uoc_exp = max_r_point["U"]
+                Isc_exp = min_r_point["I"]
+                FF = (best["I"] * best["U"]) / (Isc_exp * Uoc_exp) if (Uoc_exp * Isc_exp) > 0 else 0.0
+                items = [
+                    ("最佳负载电阻 R0 (Ω)", best["R"]),
+                    ("最佳工作电压 Um (V)", best["U"]),
+                    ("最佳工作电流 Im (mA)", best["I"]),
+                    ("最大功率 Pmax (mW)", best["P"]),
+                    ("开路电压 Uoc (V)", Uoc_exp),
+                    ("短路电流 Isc (mA)", Isc_exp),
+                    ("填充因子 FF (%)", FF * 100.0),
+                ]
+                ana.append(["指标", "数值"])
+                for k, v in items:
+                    ana.append([k, float(v)])
+                ana.column_dimensions["A"].width = 28
+                ana.column_dimensions["B"].width = 16
+        for col in ("A", "B", "C", "D", "E"):
+            ws.column_dimensions[col].width = 16
+        wb.save(path)
+        messagebox.showinfo("完成", f"已导出：\n{path}")
+
+    def export_chart(self):
+        min_points = 2 if self.is_distance_experiment else 10
+        if len(self.data_points) < min_points:
+            messagebox.showinfo("提示", f"{self.experiment_name}暂无可导出图表（至少需要 {min_points} 组数据）")
+            return
+        base = filedialog.asksaveasfilename(
+            title=f"导出{self.experiment_name}图表",
+            defaultextension=".png",
+            filetypes=[("PNG 图片", "*.png")],
+            initialfile=f"{self.experiment_name}_图表.png",
+        )
+        if not base:
+            return
+        root, ext = os.path.splitext(base)
+        ext = ext or ".png"
+        p1 = f"{root}_图1{ext}"
+        p2 = f"{root}_图2{ext}"
+        p3 = f"{root}_合并{ext}"
+
+        def _smooth_xy(xs, ys, n=260):
+            if len(xs) < 3:
+                return np.array(xs), np.array(ys)
+            x = np.array(xs, dtype=float)
+            y = np.array(ys, dtype=float)
+            ux, ui = np.unique(x, return_index=True)
+            uy = y[ui]
+            xd = np.linspace(float(ux.min()), float(ux.max()), n)
+            try:
+                f = PchipInterpolator(ux, uy)
+                yd = f(xd)
+            except Exception:
+                yd = np.interp(xd, ux, uy)
+            return xd, yd
+
+        def _plot_one(ax, idx):
+            if self.is_distance_experiment:
+                pts = sorted(self.data_points, key=lambda d: d["P"])
+                xs = [d["P"] for d in pts]
+                y1 = [d["U"] for d in pts]
+                y2 = [d["I"] for d in pts]
+                if idx == 1:
+                    xd, yd = _smooth_xy(xs, y1)
+                    ax.plot(xd, yd, "-", color=ACCENT, linewidth=2.2)
+                    ax.plot(xs, y1, "o", color=ACCENT, markersize=4)
+                    self._style_ax(ax, title="开路电压-光强关系曲线", xlabel="I (W/m²)", ylabel="VOC (V)")
+                else:
+                    xd, yd = _smooth_xy(xs, y2)
+                    ax.plot(xd, yd, "-", color=ACCENT2, linewidth=2.2)
+                    ax.plot(xs, y2, "s", color=ACCENT2, markersize=4)
+                    self._style_ax(ax, title="短路电流-光强关系曲线", xlabel="I (W/m²)", ylabel="ISC (mA)")
+            else:
+                Us = [d["U"] for d in self.data_points]
+                Is = [d["I"] for d in self.data_points]
+                Ps = [d["P"] for d in self.data_points]
+                order = np.argsort(Us)
+                x = [Us[i] for i in order]
+                if idx == 1:
+                    y = [Is[i] for i in order]
+                    xd, yd = _smooth_xy(x, y)
+                    ax.plot(xd, yd, "-", color=ACCENT, linewidth=2.2)
+                    ax.plot(x, y, "o", color=ACCENT, markersize=4)
+                    self._style_ax(ax, title="伏安特性曲线", xlabel="U (V)", ylabel="I (mA)")
+                else:
+                    y = [Ps[i] for i in order]
+                    xd, yd = _smooth_xy(x, y)
+                    ax.plot(xd, yd, "-", color=ACCENT2, linewidth=2.2)
+                    ax.plot(x, y, "s", color=ACCENT2, markersize=4)
+                    self._style_ax(ax, title="功率输出曲线（P-V）", xlabel="U (V)", ylabel="P (mW)")
+
+        fig_a = Figure(figsize=(6, 4), dpi=150, facecolor=BG)
+        ax_a = fig_a.add_subplot(111)
+        _plot_one(ax_a, 1)
+        fig_a.tight_layout()
+        fig_a.savefig(p1, dpi=150, bbox_inches="tight")
+
+        fig_b = Figure(figsize=(6, 4), dpi=150, facecolor=BG)
+        ax_b = fig_b.add_subplot(111)
+        _plot_one(ax_b, 2)
+        fig_b.tight_layout()
+        fig_b.savefig(p2, dpi=150, bbox_inches="tight")
+
+        fig_c = Figure(figsize=(12, 4), dpi=150, facecolor=BG)
+        ax_c1 = fig_c.add_subplot(121)
+        ax_c2 = fig_c.add_subplot(122)
+        _plot_one(ax_c1, 1)
+        _plot_one(ax_c2, 2)
+        fig_c.tight_layout()
+        fig_c.savefig(p3, dpi=150, bbox_inches="tight")
+        messagebox.showinfo("完成", f"已导出：\n{p1}\n{p2}\n{p3}")
 
 
 # ═══════════════════════════════════════════════
@@ -2082,10 +2198,8 @@ class ExperimentTab:
 
         bottom = tk.Frame(self.frame, bg=BG)
         bottom.pack(fill=tk.X, pady=(6, 0))
-        tk.Button(bottom, text="数据分析", bg="#2266cc", fg="#fff",
-                  font=("Microsoft YaHei", 11, "bold"),
-                  activebackground="#3377dd", relief=tk.FLAT,
-                  command=self._draw_plot).pack(fill=tk.X, padx=10, ipady=6)
+        ttk.Button(bottom, text="数据分析", style="Info.TButton",
+                   command=self._draw_plot).pack(fill=tk.X, padx=10, ipady=2)
 
     def _build_control(self, parent):
         tk.Label(parent, text="电池类型", bg=PANEL_BG, fg=FG,
@@ -2125,17 +2239,13 @@ class ExperimentTab:
 
         ttk.Separator(parent, orient="horizontal").pack(fill=tk.X, padx=10, pady=6)
 
-        tk.Button(parent, text="● 记录当前数据点",
-                  bg=ACCENT, fg="#fff", font=("Microsoft YaHei", 11, "bold"),
-                  activebackground="#ff8855", relief=tk.FLAT,
-                  command=self._record_point).pack(fill=tk.X, padx=10, pady=4, ipady=4)
+        ttk.Button(parent, text="● 记录当前数据点", style="Primary.TButton",
+                   command=self._record_point).pack(fill=tk.X, padx=10, pady=4, ipady=2)
 
         btn_frame = tk.Frame(parent, bg=PANEL_BG)
         btn_frame.pack(fill=tk.X, padx=10, pady=4)
-        tk.Button(btn_frame, text="清除数据", bg="#644", fg="#fff",
-                  font=("Microsoft YaHei", 10), relief=tk.FLAT,
-                  activebackground="#855",
-                  command=self._clear_data).pack(fill=tk.X, padx=2)
+        ttk.Button(btn_frame, text="清除数据", style="Assist.TButton",
+                   command=self._clear_data).pack(fill=tk.X, padx=2)
 
     def _build_distance_control(self, parent):
         tk.Label(parent, text="━━━ 光源距离 ━━━", bg=PANEL_BG, fg=ACCENT,
@@ -2201,10 +2311,8 @@ class ExperimentTab:
         hdr.pack(fill=tk.X, padx=8, pady=(4, 2))
         tk.Label(hdr, text="实验数据记录", bg=PANEL_BG, fg=ACCENT,
                  font=("Microsoft YaHei", 10, "bold")).pack(side=tk.LEFT)
-        tk.Button(hdr, text="删除选中行", bg="#644", fg="#fff",
-                  font=("Microsoft YaHei", 9), relief=tk.FLAT,
-                  activebackground="#855",
-                  command=self._delete_selected).pack(side=tk.RIGHT, padx=4)
+        ttk.Button(hdr, text="删除选中行", style="Assist.TButton",
+                   command=self._delete_selected).pack(side=tk.RIGHT, padx=4)
 
         if self.experiment_type == "distance":
             cols = ("序号", "d (cm)", "E (W/m²)", "Voc (V)", "Isc (mA)")
@@ -2548,6 +2656,8 @@ class EssayTab:
         best = None
         if combos:
             best = max(combos, key=lambda c: (c["x"], -c["m"]))
+        self.last_combos = combos
+        self.best_combo = best
 
         for item in self.result_tree.get_children():
             self.result_tree.delete(item)
@@ -2567,6 +2677,46 @@ class EssayTab:
                 f"最优组合: m={best['m']}, n={best['n']}, x={best['x']}（理想整除估算）"
             )
         )
+
+    def export_data_excel(self):
+        combos = getattr(self, "last_combos", [])
+        if not combos:
+            messagebox.showinfo("提示", "扩展页暂无可导出数据")
+            return
+        path = filedialog.asksaveasfilename(
+            title="导出扩展页数据",
+            defaultextension=".xlsx",
+            filetypes=[("Excel 文件", "*.xlsx")],
+            initialfile="扩展_LED优化_数据.xlsx",
+        )
+        if not path:
+            return
+        try:
+            from openpyxl import Workbook
+            from openpyxl.styles import PatternFill
+        except Exception:
+            messagebox.showerror("错误", "缺少 openpyxl，请先安装：pip install openpyxl")
+            return
+        wb = Workbook()
+        ws = wb.active
+        ws.title = "组合结果"
+        headers = ["序号", "每组并联电池数m", "串联组数n", "可点亮LED总数x", "输出电压Vout(V)", "输出电流Iout(mA)", "每支路串联LED数", "可并联支路数"]
+        ws.append(headers)
+        best = getattr(self, "best_combo", None)
+        best_fill = PatternFill(fill_type="solid", start_color="FFF2CC", end_color="FFF2CC")
+        for idx, c in enumerate(combos, start=1):
+            ws.append([idx, c["m"], c["n"], c["x"], c["v"], c["i_mA"], c["led_per_branch"], c["branch_count"]])
+            if best and c["m"] == best["m"] and c["n"] == best["n"] and c["x"] == best["x"]:
+                for col in range(1, 9):
+                    ws.cell(row=idx + 1, column=col).fill = best_fill
+        widths = [8, 18, 12, 16, 16, 16, 16, 14]
+        for i, w in enumerate(widths, start=1):
+            ws.column_dimensions[chr(64 + i)].width = w
+        wb.save(path)
+        messagebox.showinfo("完成", f"已导出：\n{path}")
+
+    def export_chart(self):
+        messagebox.showinfo("提示", "扩展页暂无图表可导出")
 
 
 # ═══════════════════════════════════════════════
@@ -2590,25 +2740,96 @@ class SolarCellApp:
         tk.Label(header, text="太阳能电池的特性测量",
                  bg=ACCENT, fg="#fff",
                  font=("Microsoft YaHei", 13, "bold")).pack(side=tk.LEFT, padx=12)
-        tk.Label(header, text="工具箱  帮助",
-                 bg=ACCENT, fg="#d6effa",
-                 font=("Microsoft YaHei", 10, "bold")).pack(side=tk.RIGHT, padx=12)
+        right = tk.Frame(header, bg=ACCENT)
+        right.pack(side=tk.RIGHT, padx=8)
+        ttk.Button(right, text="工具箱", style="Assist.TButton",
+                   command=self._open_toolbox).pack(side=tk.LEFT, padx=(0, 4))
+        ttk.Button(right, text="帮助", style="Assist.TButton",
+                   command=self._open_help).pack(side=tk.LEFT)
 
         main = tk.Frame(self.root, bg=BG)
         main.pack(fill=tk.BOTH, expand=True, padx=8, pady=8)
-        tabs = ttk.Notebook(main)
-        tabs.pack(fill=tk.BOTH, expand=True)
+        self.tabs = ttk.Notebook(main)
+        self.tabs.pack(fill=tk.BOTH, expand=True)
 
-        exp1_frame = tk.Frame(tabs, bg=BG)
-        exp2_frame = tk.Frame(tabs, bg=BG)
-        essay_frame = tk.Frame(tabs, bg=BG)
-        tabs.add(exp1_frame, text="实验一  伏安特性")
-        tabs.add(exp2_frame, text="实验二  距离特性")
-        tabs.add(essay_frame, text="扩展  LED优化")
+        exp1_frame = tk.Frame(self.tabs, bg=BG)
+        exp2_frame = tk.Frame(self.tabs, bg=BG)
+        essay_frame = tk.Frame(self.tabs, bg=BG)
+        self.tabs.add(exp1_frame, text="实验一  伏安特性")
+        self.tabs.add(exp2_frame, text="实验二  距离特性")
+        self.tabs.add(essay_frame, text="扩展  LED优化")
 
         self.exp1 = ExperimentOneTab(exp1_frame, experiment_name="实验一")
         self.exp2 = ExperimentOneTab(exp2_frame, experiment_name="实验二")
         self.essay = EssayTab(essay_frame)
+
+    def _current_tab_key(self):
+        idx = self.tabs.index(self.tabs.select())
+        if idx == 0:
+            return "exp1"
+        if idx == 1:
+            return "exp2"
+        return "ext"
+
+    def _open_toolbox(self):
+        menu = tk.Menu(self.root, tearoff=0, bg="#f7f7f7", fg="#111111",
+                       activebackground="#d9ecff", activeforeground="#000000")
+        key = self._current_tab_key()
+        if key == "exp1":
+            menu.add_command(label="一键连线", command=self.exp1._auto_wire_for_test)
+            menu.add_command(label="一键导入实验一标准数据", command=self.exp1._load_standard_data)
+            menu.add_separator()
+            menu.add_command(label="导出本实验数据（Excel）", command=self.exp1.export_data_excel)
+            menu.add_command(label="导出本实验图表", command=self.exp1.export_chart)
+        elif key == "exp2":
+            menu.add_command(label="一键连线 Isc", command=self.exp2._auto_wire_exp2_isc)
+            menu.add_command(label="一键连线 Voc", command=self.exp2._auto_wire_exp2_voc)
+            menu.add_command(label="一键导入实验二标准数据", command=self.exp2._load_standard_data)
+            menu.add_separator()
+            menu.add_command(label="导出本实验数据（Excel）", command=self.exp2.export_data_excel)
+            menu.add_command(label="导出本实验图表", command=self.exp2.export_chart)
+        else:
+            menu.add_command(label="导出本实验数据（Excel）", command=self.essay.export_data_excel)
+            menu.add_command(label="导出本实验图表", command=self.essay.export_chart)
+        try:
+            x, y = self.root.winfo_pointerxy()
+            menu.tk_popup(x, y)
+        finally:
+            menu.grab_release()
+
+    def _open_help(self):
+        win = tk.Toplevel(self.root)
+        win.title("帮助")
+        win.configure(bg=BG)
+        win.geometry("460x260")
+        win.resizable(False, False)
+
+        tk.Label(win, text="使用说明", bg=ACCENT, fg="#fff",
+                 font=("Microsoft YaHei", 12, "bold")).pack(fill=tk.X, ipady=6)
+        key = self._current_tab_key()
+        if key == "exp1":
+            msg = (
+                "实验一帮助：\n"
+                "1. 完成接线后记录数据（或自动填充标准数据）。\n"
+                "2. 打开特性曲线窗口查看 I-V / P-V。\n"
+                "3. 曲线窗口可切换拟合曲线与原始图像。"
+            )
+        elif key == "exp2":
+            msg = (
+                "实验二帮助：\n"
+                "1. 在 Isc/Voc 两种模式下分别接线并记录。\n"
+                "2. 同一距离下需要完成两次测量后形成完整数据。\n"
+                "3. 打开曲线窗口查看 Voc-I 与 Isc-I。"
+            )
+        else:
+            msg = (
+                "扩展页帮助：\n"
+                "1. 输入 N、Vm、Im、Vled、Iled 参数。\n"
+                "2. 点击“计算方案”得到全部 (m, n, x) 组合。\n"
+                "3. 黄色高亮行为当前最优组合。"
+            )
+        tk.Label(win, text=msg, bg=BG, fg=FG, justify="left",
+                 anchor="nw", font=("Microsoft YaHei", 10)).pack(fill=tk.BOTH, expand=True, padx=12, pady=12)
 
 
 def run():
