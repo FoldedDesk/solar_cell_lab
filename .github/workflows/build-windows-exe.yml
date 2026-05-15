@@ -30,7 +30,7 @@ jobs:
 
       - name: Build EXE
         run: |
-          pyinstaller -F -w -n solar_cell_lab main.py
+          pyinstaller -F -w -n solar_cell_lab main.py --collect-all openpyxl --collect-all et_xmlfile --collect-all matplotlib --collect-all PIL
 
       - name: Upload artifact
         uses: actions/upload-artifact@v4
