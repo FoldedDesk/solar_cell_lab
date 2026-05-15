@@ -34,6 +34,37 @@ ACCENT = "#0086c8"
 ACCENT2 = "#1f9f59"
 GRID_COLOR = "#8da0b1"
 
+def configure_ttk_theme(root):
+    """统一 ttk 在 Windows/macOS 的可读性，避免 mac 下白底浅字。"""
+    style = ttk.Style(root)
+    if sys.platform == "darwin":
+        # macOS 的 Aqua 主题会忽略部分颜色设置，改用 clam 可控性更好
+        try:
+            style.theme_use("clam")
+        except Exception:
+            pass
+
+    style.configure(".", background=BG, foreground=FG)
+    style.configure("TFrame", background=BG)
+    style.configure("TLabel", background=BG, foreground=FG)
+    style.configure("TNotebook", background=BG, borderwidth=0)
+    style.configure("TNotebook.Tab", background=PANEL_BG, foreground=FG, padding=(12, 6))
+    style.map(
+        "TNotebook.Tab",
+        background=[("selected", "#e9f4fa"), ("active", "#dcecf5")],
+        foreground=[("selected", "#102235"), ("active", "#1b3b5a")],
+    )
+    style.configure("Treeview", background="#f2f4f7", fieldbackground="#f2f4f7", foreground="#111")
+    style.configure("Treeview.Heading", background=PANEL_BG, foreground="#12283d")
+    style.map("Treeview", background=[("selected", "#cddff0")], foreground=[("selected", "#111")])
+    # 彩色按钮样式（跨平台可控）
+    style.configure("Primary.TButton", background="#2a6", foreground="#ffffff", padding=(10, 6), borderwidth=0)
+    style.map("Primary.TButton", background=[("active", "#3b7")], foreground=[("active", "#ffffff")])
+    style.configure("Info.TButton", background="#2266cc", foreground="#ffffff", padding=(10, 6), borderwidth=0)
+    style.map("Info.TButton", background=[("active", "#3377dd")], foreground=[("active", "#ffffff")])
+    style.configure("Assist.TButton", background="#4455aa", foreground="#ffffff", padding=(10, 6), borderwidth=0)
+    style.map("Assist.TButton", background=[("active", "#5566bb")], foreground=[("active", "#ffffff")])
+
 
 def solve_operating_point(params, R_ohm):
     """给定负载电阻 R，求工作点 (V, I, P)。"""
@@ -218,12 +249,6 @@ class ExperimentOneTab:
         right.pack_propagate(False)
         self._build_wiring_scene(mid, large=True, show_button=False)
         self._build_right(right)
-        bottom = tk.Frame(self.frame, bg=BG)
-        bottom.pack(fill=tk.X, pady=(6, 0))
-        tk.Button(bottom, text="数据分析", bg="#2266cc", fg="#fff",
-                  font=("Microsoft YaHei", 11, "bold"),
-                  activebackground="#3377dd", relief=tk.FLAT,
-                  command=self._show_analysis).pack(fill=tk.X, padx=10, ipady=6)
 
     # ── 左侧控制面板 ──
 
@@ -319,10 +344,10 @@ class ExperimentOneTab:
                   command=self._open_lab_window).pack(fill=tk.X, padx=10, pady=(2, 6), ipady=3)
 
     def _build_wiring_scene(self, parent, large=False, show_button=True):
-        tk.Label(parent, text="━━━ 实验接线场景 ━━━", bg=PANEL_BG, fg=ACCENT,
-                 font=("Microsoft YaHei", 10, "bold")).pack(anchor="w", padx=10, pady=(0, 2))
-        self.wire_status = tk.Label(parent, text="接线状态: 未完成", bg=PANEL_BG, fg="#ffcc66",
-                                    font=("Microsoft YaHei", 9))
+        tk.Label(parent, text="━━━ 实验接线场景 ━━━", bg=BG, fg="#114a76",
+                 font=("Microsoft YaHei", 11, "bold")).pack(anchor="w", padx=10, pady=(0, 2))
+        self.wire_status = tk.Label(parent, text="接线状态: 未完成", bg=BG, fg="#9a4f00",
+                                    font=("Microsoft YaHei", 10, "bold"))
         self.wire_status.pack(anchor="w", padx=10, pady=(0, 4))
 
         cw, ch = (960, 620) if large else (250, 320)
@@ -863,19 +888,15 @@ class ExperimentOneTab:
         if ok:
             if self.is_distance_experiment:
                 mode_text = "短路电流 Isc" if self.exp2_measure_mode == "isc" else "开路电压 Voc"
-                self.wire_status.config(text="接线状态: 正确（{}）".format(mode_text), fg="#66ff99")
+                self.wire_status.config(text="接线状态: 正确（{}）".format(mode_text), fg="#0d7c3b")
             else:
-                self.wire_status.config(text="接线状态: 正确，可采集", fg="#66ff99")
+                self.wire_status.config(text="接线状态: 正确，可采集", fg="#0d7c3b")
                 self._try_auto_record_on_r_change()
         else:
             if self.is_distance_experiment:
-                if self.exp2_measure_mode == "isc":
-                    msg = "接线状态: 未完成（Isc 模式需 panel+→A→panel-，且无电阻/电压表支路）"
-                else:
-                    msg = "接线状态: 未完成（Voc 模式需电压表直接并在 panel±，断开 A-电阻支路）"
-                self.wire_status.config(text=msg, fg="#ffcc66")
+                self.wire_status.config(text="接线状态: 未连线", fg="#9a4f00")
             else:
-                self.wire_status.config(text="接线状态: 未完成", fg="#ffcc66")
+                self.wire_status.config(text="接线状态: 未完成", fg="#9a4f00")
         self._update_circuit_diagram()
 
     def _auto_wire_for_test(self):
@@ -987,9 +1008,12 @@ class ExperimentOneTab:
         pin = self.light_intensity * self.panel_area_m2
         pout = U_val * I_mA / 1000.0
         eta = (pout / pin * 100.0) if pin > 0 else 0.0
-        self.core_pin_lbl.config(text="入射光功率 Pin = {:.4f} W".format(pin))
-        self.core_pout_lbl.config(text="输出电功率 Pout = {:.4f} W".format(pout))
-        self.core_eta_lbl.config(text="转换效率 η = {:.2f} %".format(eta))
+        if hasattr(self, "core_pin_lbl") and self.core_pin_lbl is not None and self.core_pin_lbl.winfo_exists():
+            self.core_pin_lbl.config(text="入射光功率 Pin = {:.4f} W".format(pin))
+        if hasattr(self, "core_pout_lbl") and self.core_pout_lbl is not None and self.core_pout_lbl.winfo_exists():
+            self.core_pout_lbl.config(text="输出电功率 Pout = {:.4f} W".format(pout))
+        if hasattr(self, "core_eta_lbl") and self.core_eta_lbl is not None and self.core_eta_lbl.winfo_exists():
+            self.core_eta_lbl.config(text="转换效率 η = {:.2f} %".format(eta))
 
     def _build_resistance_box(self, parent):
         tk.Label(parent, text="━━━ 负载电阻 ━━━", bg=PANEL_BG, fg=ACCENT,
@@ -1111,21 +1135,15 @@ class ExperimentOneTab:
     def _build_right(self, parent):
         btns = tk.Frame(parent, bg=PANEL_BG)
         btns.pack(fill=tk.X, padx=8, pady=(8, 6))
-        tk.Button(btns, text="打开特性曲线窗口", bg="#2a6", fg="#fff",
-                  font=("Microsoft YaHei", 10, "bold"), relief=tk.FLAT,
-                  activebackground="#3b7",
-                  command=self._open_curve_and_analysis).pack(fill=tk.X, ipady=4)
-        tk.Button(btns, text="自动填充标准数据", bg="#1f7a4d", fg="#fff",
-                  font=("Microsoft YaHei", 10, "bold"), relief=tk.FLAT,
-                  activebackground="#2d9561",
-                  command=self._load_standard_data).pack(fill=tk.X, pady=(6, 0), ipady=4)
+        ttk.Button(btns, text="打开特性曲线窗口", style="Primary.TButton",
+                   command=self._open_curve_and_analysis).pack(fill=tk.X, ipady=2)
+        ttk.Button(btns, text="自动填充标准数据", style="Info.TButton",
+                   command=self._load_standard_data).pack(fill=tk.X, pady=(6, 0), ipady=2)
 
         btn_row = tk.Frame(parent, bg=PANEL_BG)
         btn_row.pack(fill=tk.X, padx=8, pady=(6, 8))
-        tk.Button(btn_row, text="打开实验数据表", bg="#2266cc", fg="#fff",
-                  font=("Microsoft YaHei", 10, "bold"), relief=tk.FLAT,
-                  activebackground="#3377dd",
-                  command=self._open_data_table_window).pack(fill=tk.X, ipady=4)
+        ttk.Button(btn_row, text="打开实验数据表", style="Info.TButton",
+                   command=self._open_data_table_window).pack(fill=tk.X, ipady=2)
         self._build_autowire_buttons(parent, pady=(2, 8))
 
     def _open_data_table_window(self):
@@ -1194,10 +1212,8 @@ class ExperimentOneTab:
         self._style_ax(self.ax1, title="伏安特性曲线", xlabel="U (V)", ylabel="I (mA)")
         self.canvas1 = FigureCanvasTkAgg(self.fig1, master=col1)
         self.canvas1.get_tk_widget().pack(fill=tk.BOTH, expand=True)
-        self.curve_btn1 = tk.Button(col1, text="展示拟合曲线", bg="#355c9a", fg="#fff",
-                                    font=("Microsoft YaHei", 9, "bold"), relief=tk.FLAT,
-                                    activebackground="#4a73b3",
-                                    command=lambda: self._toggle_fit_curve(1))
+        self.curve_btn1 = ttk.Button(col1, text="展示拟合曲线", style="Assist.TButton",
+                                     command=lambda: self._toggle_fit_curve(1))
         self.curve_btn1.pack(fill=tk.X, pady=(6, 0), ipady=3)
 
         self.fig2 = Figure(figsize=(4.5, 3.2), dpi=100, facecolor=BG)
@@ -1205,10 +1221,8 @@ class ExperimentOneTab:
         self._style_ax(self.ax2, title="功率输出曲线（P-V）", xlabel="U (V)", ylabel="P (mW)")
         self.canvas2 = FigureCanvasTkAgg(self.fig2, master=col2)
         self.canvas2.get_tk_widget().pack(fill=tk.BOTH, expand=True)
-        self.curve_btn2 = tk.Button(col2, text="展示拟合曲线", bg="#355c9a", fg="#fff",
-                                    font=("Microsoft YaHei", 9, "bold"), relief=tk.FLAT,
-                                    activebackground="#4a73b3",
-                                    command=lambda: self._toggle_fit_curve(2))
+        self.curve_btn2 = ttk.Button(col2, text="展示拟合曲线", style="Assist.TButton",
+                                     command=lambda: self._toggle_fit_curve(2))
         self.curve_btn2.pack(fill=tk.X, pady=(6, 0), ipady=3)
         min_points = 2 if self.is_distance_experiment else 10
         if len(self.data_points) >= min_points:
@@ -1246,19 +1260,13 @@ class ExperimentOneTab:
         if self.is_distance_experiment:
             row = tk.Frame(box, bg=PANEL_BG)
             row.pack(fill=tk.X)
-            tk.Button(row, text="一键连线 Isc", bg="#8a5a00", fg="#fff",
-                      font=("Microsoft YaHei", 9, "bold"), relief=tk.FLAT,
-                      activebackground="#a06b00",
-                      command=self._auto_wire_exp2_isc).pack(side=tk.LEFT, expand=True, fill=tk.X, padx=(0, 3), ipady=3)
-            tk.Button(row, text="一键连线 Voc", bg="#005a8a", fg="#fff",
-                      font=("Microsoft YaHei", 9, "bold"), relief=tk.FLAT,
-                      activebackground="#0d6ea3",
-                      command=self._auto_wire_exp2_voc).pack(side=tk.LEFT, expand=True, fill=tk.X, padx=(3, 0), ipady=3)
+            ttk.Button(row, text="一键连线 Isc", style="Assist.TButton",
+                       command=self._auto_wire_exp2_isc).pack(side=tk.LEFT, expand=True, fill=tk.X, padx=(0, 3), ipady=1)
+            ttk.Button(row, text="一键连线 Voc", style="Assist.TButton",
+                       command=self._auto_wire_exp2_voc).pack(side=tk.LEFT, expand=True, fill=tk.X, padx=(3, 0), ipady=1)
         else:
-            tk.Button(box, text="一键连线", bg="#4455aa", fg="#fff",
-                      font=("Microsoft YaHei", 10, "bold"),
-                      activebackground="#5566bb", relief=tk.FLAT,
-                      command=self._auto_wire_for_test).pack(fill=tk.X, ipady=4)
+            ttk.Button(box, text="一键连线", style="Assist.TButton",
+                       command=self._auto_wire_for_test).pack(fill=tk.X, ipady=2)
 
     def _refresh_table_view(self):
         if self.tree is None or not self.tree.winfo_exists():
@@ -2425,6 +2433,143 @@ class ExperimentTab:
 
 
 # ═══════════════════════════════════════════════
+#  扩展：15块电池驱动LED优化
+# ═══════════════════════════════════════════════
+
+class EssayTab:
+    """扩展：给定 N，求 (m, n, x) 最优组合。"""
+
+    def __init__(self, parent_frame):
+        self.frame = parent_frame
+        self._build()
+
+    def _build(self):
+        wrap = tk.Frame(self.frame, bg=BG)
+        wrap.pack(fill=tk.BOTH, expand=True, padx=0, pady=0)
+
+        left = tk.Frame(wrap, bg=PANEL_BG, width=160)
+        left.pack(side=tk.LEFT, fill=tk.Y, padx=(0, 10))
+        left.pack_propagate(False)
+        right = tk.Frame(wrap, bg=BG)
+        right.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
+
+        self.vars = {
+            "N": tk.DoubleVar(value=15),
+            "Vm": tk.DoubleVar(value=2.16),
+            "Im": tk.DoubleVar(value=21.7),
+            "E": tk.DoubleVar(value=242.0),
+            "Vled": tk.DoubleVar(value=2.8),
+            "Iled": tk.DoubleVar(value=8.0),
+        }
+
+        fields = [
+            ("电池数量 N", "N"),
+            ("单块 Vm (V)", "Vm"),
+            ("单块 Im (mA)", "Im"),
+            ("光强 E (W/m²)", "E"),
+            ("LED 额定电压 (V)", "Vled"),
+            ("LED 额定电流 (mA)", "Iled"),
+        ]
+        readonly_keys = {"Vm", "Im", "E"}
+        for text, key in fields:
+            row = tk.Frame(left, bg=PANEL_BG)
+            row.pack(fill=tk.X, padx=10, pady=3)
+            tk.Label(row, text=text, bg=PANEL_BG, fg=FG, anchor="w",
+                     font=("Microsoft YaHei", 10)).pack(fill=tk.X)
+            ent = tk.Entry(row, textvariable=self.vars[key], font=("Consolas", 11),
+                           bg="#fff", fg="#111")
+            if key in readonly_keys:
+                ent.config(state="disabled", disabledbackground="#d9d9d9", disabledforeground="#666")
+            ent.pack(fill=tk.X, pady=(2, 0))
+
+        ttk.Button(left, text="计算方案", style="Info.TButton",
+                   command=self._calc).pack(fill=tk.X, padx=10, pady=(10, 8), ipady=2)
+
+        table_wrap = tk.Frame(right, bg=BG)
+        table_wrap.pack(fill=tk.BOTH, expand=True, pady=(0, 4))
+        cols = ("序号", "每组并联电池数m", "串联组数n", "可点亮LED总数x", "输出电压Vout(V)", "输出电流Iout(mA)", "每支路串联LED数", "可并联支路数")
+        self.result_tree = ttk.Treeview(table_wrap, columns=cols, show="headings", height=14)
+        widths = (60, 170, 120, 170, 150, 170, 170, 140)
+        for c, w in zip(cols, widths):
+            self.result_tree.heading(c, text=c)
+            self.result_tree.column(c, width=w, minwidth=80, anchor="center", stretch=True)
+        _style = ttk.Style()
+        _style.configure(
+            "Expand.Treeview",
+            background=BG,
+            fieldbackground=BG,
+            bordercolor=BG,
+            lightcolor=BG,
+            darkcolor=BG
+        )
+        _style.configure("Expand.Treeview.Heading", background=PANEL_BG, foreground=FG)
+        self.result_tree.configure(style="Expand.Treeview")
+        self.result_tree.pack(side=tk.LEFT, fill=tk.BOTH, expand=True, padx=0, pady=0)
+        self.result_tree.tag_configure("best", background="#ffe56a", foreground="#111111")
+
+        self.summary_lbl = tk.Label(right, text="", bg=BG, fg=FG, justify="left",
+                                    anchor="w", font=("Microsoft YaHei", 10))
+        self.summary_lbl.pack(fill=tk.X, padx=4, pady=(2, 0))
+        self._calc()
+
+    def _calc(self):
+        try:
+            N = int(self.vars["N"].get())
+            Vm = float(self.vars["Vm"].get())
+            Im_mA = float(self.vars["Im"].get())
+            Vled = float(self.vars["Vled"].get())
+            Iled_mA = float(self.vars["Iled"].get())
+            if min(N, Vm, Im_mA, Vled, Iled_mA) <= 0:
+                raise ValueError
+        except Exception:
+            for item in self.result_tree.get_children():
+                self.result_tree.delete(item)
+            self.summary_lbl.config(text="输入参数无效，请输入大于0的数值。")
+            return
+
+        Im = Im_mA / 1000.0
+        Iled = Iled_mA / 1000.0
+
+        combos = []
+        for m in range(1, N + 1):
+            if N % m != 0:
+                continue
+            n = N // m
+            v_out = n * Vm
+            i_out = m * Im
+            led_per_branch = int(v_out // Vled)
+            branch_count = int(i_out // Iled)
+            x = led_per_branch * branch_count
+            combos.append({
+                "m": m, "n": n, "x": x,
+                "v": v_out, "i_mA": i_out * 1000.0,
+                "led_per_branch": led_per_branch, "branch_count": branch_count
+            })
+        best = None
+        if combos:
+            best = max(combos, key=lambda c: (c["x"], -c["m"]))
+
+        for item in self.result_tree.get_children():
+            self.result_tree.delete(item)
+        for idx, c in enumerate(combos, start=1):
+            tags = ("best",) if best is not None and c["m"] == best["m"] and c["n"] == best["n"] else ()
+            self.result_tree.insert("", "end", values=(
+                idx, c["m"], c["n"], c["x"],
+                f"{c['v']:.2f}", f"{c['i_mA']:.2f}",
+                c["led_per_branch"], c["branch_count"]
+            ), tags=tags)
+        if not combos:
+            self.summary_lbl.config(text="无可行组合。")
+            return
+        self.summary_lbl.config(
+            text=(
+                f"输入: N={N}, Vm={Vm:.2f}V, Im={Im_mA:.1f}mA, Vled={Vled:.2f}V, Iled={Iled_mA:.1f}mA\n"
+                f"最优组合: m={best['m']}, n={best['n']}, x={best['x']}（理想整除估算）"
+            )
+        )
+
+
+# ═══════════════════════════════════════════════
 #  主应用
 # ═══════════════════════════════════════════════
 
@@ -2435,6 +2580,7 @@ class SolarCellApp:
         self.root.geometry("1820x900")
         self.root.configure(bg=BG)
         self.root.minsize(1560, 760)
+        configure_ttk_theme(self.root)
         self._build_ui()
 
     def _build_ui(self):
@@ -2455,11 +2601,14 @@ class SolarCellApp:
 
         exp1_frame = tk.Frame(tabs, bg=BG)
         exp2_frame = tk.Frame(tabs, bg=BG)
+        essay_frame = tk.Frame(tabs, bg=BG)
         tabs.add(exp1_frame, text="实验一  伏安特性")
         tabs.add(exp2_frame, text="实验二  距离特性")
+        tabs.add(essay_frame, text="扩展  LED优化")
 
         self.exp1 = ExperimentOneTab(exp1_frame, experiment_name="实验一")
         self.exp2 = ExperimentOneTab(exp2_frame, experiment_name="实验二")
+        self.essay = EssayTab(essay_frame)
 
 
 def run():
