@@ -34,6 +34,24 @@ FG = "#1f2d3d"
 ACCENT = "#0086c8"
 ACCENT2 = "#1f9f59"
 GRID_COLOR = "#8da0b1"
+R_MIN = 0.0
+R_MAX = 99999.9
+
+
+def bind_numeric_entry(entry, allow_decimal=True):
+    """限制 Entry 只能输入数字（可选小数点）。"""
+    def _on_validate(new_text):
+        if new_text == "":
+            return True
+        if allow_decimal:
+            if new_text.count(".") > 1:
+                return False
+            t = new_text.replace(".", "", 1)
+            return t.isdigit()
+        return new_text.isdigit()
+
+    vcmd = (entry.register(_on_validate), "%P")
+    entry.configure(validate="key", validatecommand=vcmd)
 
 def configure_ttk_theme(root):
     """统一 ttk 在 Windows/macOS 的可读性，避免 mac 下白底浅字。"""
@@ -129,6 +147,7 @@ class _ManualInputDialog:
         self.u_entry = tk.Entry(f1, textvariable=self.u_var, font=("Consolas", 13),
                                 bg="#1a1a1a", fg="#00ff88", insertbackground="#00ff88",
                                 width=12, relief=tk.SUNKEN, bd=2)
+        bind_numeric_entry(self.u_entry, allow_decimal=True)
         self.u_entry.pack(side=tk.LEFT, padx=8)
         self.u_entry.focus_set()
 
@@ -141,6 +160,7 @@ class _ManualInputDialog:
         self.i_entry = tk.Entry(f2, textvariable=self.i_var, font=("Consolas", 13),
                                 bg="#1a1a1a", fg="#00ff88", insertbackground="#00ff88",
                                 width=12, relief=tk.SUNKEN, bd=2)
+        bind_numeric_entry(self.i_entry, allow_decimal=True)
         self.i_entry.pack(side=tk.LEFT, padx=8)
 
         # Enter 键绑定
@@ -858,6 +878,7 @@ class ExperimentOneTab:
         e = tk.Entry(dlg, textvariable=v, font=("Consolas", 12), width=14,
                      bg="#1a1a1a", fg="#00ff88", insertbackground="#00ff88",
                      relief=tk.SUNKEN, bd=2)
+        bind_numeric_entry(e, allow_decimal=True)
         e.pack()
         e.focus_set()
         e.selection_range(0, tk.END)
@@ -865,10 +886,10 @@ class ExperimentOneTab:
         def _submit():
             try:
                 val = float(v.get().strip())
-                if val < 0:
+                if val < R_MIN or val > R_MAX:
                     raise ValueError
             except ValueError:
-                self._show_toast("请输入有效电阻值（>=0）")
+                self._show_toast("电阻范围应为 0 - 99999.9 Ω")
                 return
             self._set_resistance_value(val)
             if self.is_distance_experiment:
@@ -1199,6 +1220,7 @@ class ExperimentOneTab:
                                   font=("Consolas", 11), bg="#1a1a1a", fg="#00ff88",
                                   insertbackground="#00ff88", width=8,
                                   relief=tk.SUNKEN, bd=1)
+        bind_numeric_entry(r_manual_entry, allow_decimal=True)
         r_manual_entry.pack(side=tk.LEFT, padx=4)
         r_manual_entry.bind("<Return>", self._on_r_manual_enter)
         tk.Label(manual_f, text="Ω", bg="#1e1e1e", fg="#aaa",
@@ -1237,10 +1259,10 @@ class ExperimentOneTab:
         """手动输入电阻值"""
         try:
             val = float(self.r_manual_var.get().strip())
-            if val < 0:
+            if val < R_MIN or val > R_MAX:
                 raise ValueError
         except ValueError:
-            self._show_toast("请输入有效的电阻值（≥0）")
+            self._show_toast("电阻范围应为 0 - 99999.9 Ω")
             return
         self.r_value = val
         if val == int(val):
@@ -1689,8 +1711,8 @@ class ExperimentOneTab:
     def _on_table_double_click(self, event):
         if self.tree is None or not self.tree.winfo_exists():
             return
-        if self.is_distance_experiment:
-            self._show_toast("实验二记录请通过接线与记录按钮更新")
+        if not self.is_distance_experiment:
+            self._show_toast("实验一数据表不可编辑")
             return
         item_id = self.tree.identify_row(event.y)
         col_id = self.tree.identify_column(event.x)
@@ -1733,6 +1755,7 @@ class ExperimentOneTab:
         e = tk.Entry(dlg, textvariable=v, font=("Consolas", 12), width=16,
                      bg="#1a1a1a", fg="#00ff88", insertbackground="#00ff88",
                      relief=tk.SUNKEN, bd=2)
+        bind_numeric_entry(e, allow_decimal=True)
         e.pack()
         e.focus_set()
         e.selection_range(0, tk.END)
@@ -2741,6 +2764,7 @@ class EssayTab:
                      font=("Microsoft YaHei", 10)).pack(fill=tk.X)
             ent = tk.Entry(row, textvariable=self.vars[key], font=("Consolas", 11),
                            bg="#fff", fg="#111")
+            bind_numeric_entry(ent, allow_decimal=True)
             if key in readonly_keys:
                 ent.config(state="disabled", disabledbackground="#d9d9d9", disabledforeground="#666")
             ent.pack(fill=tk.X, pady=(2, 0))
