@@ -38,6 +38,25 @@ R_MIN = 0.0
 R_MAX = 99999.9
 
 
+def clamp(v, lo, hi):
+    return max(lo, min(hi, v))
+
+
+def set_adaptive_geometry(win, w_ratio=0.5, h_ratio=0.5, min_w=320, min_h=220, max_w=None, max_h=None):
+    """按屏幕比例设置窗口尺寸并居中。"""
+    sw = int(win.winfo_screenwidth() or 1920)
+    sh = int(win.winfo_screenheight() or 1080)
+    if max_w is None:
+        max_w = int(sw * 0.96)
+    if max_h is None:
+        max_h = int(sh * 0.92)
+    w = clamp(int(sw * w_ratio), min_w, max_w)
+    h = clamp(int(sh * h_ratio), min_h, max_h)
+    x = max(0, (sw - w) // 2)
+    y = max(0, (sh - h) // 2)
+    win.geometry(f"{w}x{h}+{x}+{y}")
+
+
 def bind_numeric_entry(entry, allow_decimal=True):
     """限制 Entry 只能输入数字（可选小数点）。"""
     def _on_validate(new_text):
@@ -128,7 +147,7 @@ class _ManualInputDialog:
         self.top = tk.Toplevel(parent)
         self.top.title("手动输入测量数据")
         self.top.configure(bg=BG)
-        self.top.geometry("360x240")
+        set_adaptive_geometry(self.top, w_ratio=0.24, h_ratio=0.28, min_w=340, min_h=230, max_w=420, max_h=300)
         self.top.resizable(False, False)
         self.top.grab_set()
 
@@ -211,6 +230,9 @@ class ExperimentOneTab:
 
     def __init__(self, parent_frame, experiment_name="实验一"):
         self.frame = parent_frame
+        top = self.frame.winfo_toplevel()
+        self.screen_w = int(top.winfo_screenwidth() or 1920)
+        self.screen_h = int(top.winfo_screenheight() or 1080)
         self.experiment_name = experiment_name
         self.is_distance_experiment = (self.experiment_name == "实验二")
         self.title = "改变负载电阻"
@@ -256,6 +278,7 @@ class ExperimentOneTab:
         self.curve_btn1 = None
         self.curve_btn2 = None
         self.scene_size = (250, 320)
+        self.scene_host = None
         self.devices = {
             "lamp": {"x": 72, "y": 86, "w": 104, "h": 52, "title": "大功率灯", "fill": "#3a2f1b"},
             "panel": {"x": 404, "y": 72, "w": 122, "h": 78, "title": "太阳能板", "fill": "#17324a"},
@@ -309,11 +332,12 @@ class ExperimentOneTab:
     def _build(self):
         body = tk.Frame(self.frame, bg=BG)
         body.pack(fill=tk.BOTH, expand=True)
+        right_w = clamp(int(self.screen_w * 0.28), 340, 520)
+        right = tk.Frame(body, bg=PANEL_BG, width=right_w)
+        right.pack(side=tk.RIGHT, fill=tk.Y)
+        right.pack_propagate(False)
         mid = tk.Frame(body, bg=BG)
         mid.pack(side=tk.LEFT, fill=tk.BOTH, expand=True, padx=(0, 6))
-        right = tk.Frame(body, bg=PANEL_BG, width=520)
-        right.pack(side=tk.LEFT, fill=tk.Y)
-        right.pack_propagate(False)
         self._build_wiring_scene(mid, large=True, show_button=False)
         self._build_right(right)
 
@@ -403,21 +427,29 @@ class ExperimentOneTab:
                    command=self._open_lab_window).pack(fill=tk.X, padx=10, pady=(2, 6), ipady=1)
 
     def _build_wiring_scene(self, parent, large=False, show_button=True):
+        self.scene_host = parent
         tk.Label(parent, text="━━━ 实验接线场景 ━━━", bg=BG, fg="#114a76",
                  font=("Microsoft YaHei", 11, "bold")).pack(anchor="w", padx=10, pady=(0, 2))
         self.wire_status = tk.Label(parent, text="接线状态: 未完成", bg=BG, fg="#9a4f00",
                                     font=("Microsoft YaHei", 10, "bold"))
         self.wire_status.pack(anchor="w", padx=10, pady=(0, 4))
 
-        cw, ch = (960, 620) if large else (250, 320)
+        if large:
+            right_w = clamp(int(self.screen_w * 0.28), 340, 520)
+            cw = clamp(self.screen_w - right_w - 90, 620, 1180)
+            ch = clamp(self.screen_h - 250, 420, 760)
+        else:
+            cw, ch = (250, 320)
         self.scene_size = (cw, ch)
         self.scene = tk.Canvas(parent, width=cw, height=ch, bg="#d7dadd",
                                highlightthickness=1, highlightbackground="#2d3c5a")
-        self.scene.pack(padx=10, pady=2)
+        self.scene.pack(fill=tk.BOTH, expand=True, padx=10, pady=2)
         self.scene.bind("<ButtonPress-1>", self._on_scene_press)
         self.scene.bind("<B1-Motion>", self._on_scene_drag)
         self.scene.bind("<ButtonRelease-1>", self._on_scene_release)
         self.scene.bind("<Double-Button-1>", self._on_scene_double_click)
+        if large:
+            parent.bind("<Configure>", self._on_scene_host_resize)
         if show_button:
             ttk.Button(parent, text="一键连线", style="Assist.TButton",
                        command=self._auto_wire_for_test).pack(fill=tk.X, padx=10, pady=(2, 4), ipady=1)
@@ -429,6 +461,19 @@ class ExperimentOneTab:
         tk.Label(timer_bar, textvariable=self.timer_var, bg="#101010", fg="#ff2a2a",
                  font=("Consolas", 16, "bold"), padx=8, pady=2).pack(side=tk.LEFT, padx=8)
         self._start_timer()
+        self._draw_scene()
+
+    def _on_scene_host_resize(self, _event=None):
+        if self.scene is None or not self.scene.winfo_exists() or self.scene_host is None:
+            return
+        if not self.scene_host.winfo_exists():
+            return
+        w = max(620, self.scene_host.winfo_width() - 20)
+        h = max(420, self.scene_host.winfo_height() - 76)
+        if abs(w - self.scene_size[0]) < 2 and abs(h - self.scene_size[1]) < 2:
+            return
+        self.scene_size = (w, h)
+        self.scene.config(width=w, height=h)
         self._draw_scene()
 
     def _start_timer(self):
@@ -451,7 +496,7 @@ class ExperimentOneTab:
         win = tk.Toplevel(self.frame.winfo_toplevel())
         win.title("{}独立实验台".format(self.experiment_name))
         win.configure(bg=BG)
-        win.geometry("1080x700")
+        set_adaptive_geometry(win, w_ratio=0.78, h_ratio=0.78, min_w=980, min_h=620, max_w=1500, max_h=980)
         win.resizable(True, True)
         self.lab_win = win
         self._layout_devices_for_large_scene()
@@ -748,7 +793,7 @@ class ExperimentOneTab:
         dlg = tk.Toplevel(self.frame.winfo_toplevel())
         dlg.title("调节光源-太阳能板距离")
         dlg.configure(bg=BG)
-        dlg.geometry("760x250")
+        set_adaptive_geometry(dlg, w_ratio=0.6, h_ratio=0.32, min_w=700, min_h=240, max_w=980, max_h=360)
         dlg.resizable(False, False)
         self.distance_win = dlg
 
@@ -866,7 +911,7 @@ class ExperimentOneTab:
         dlg = tk.Toplevel(self.frame.winfo_toplevel())
         dlg.title("调整负载电阻")
         dlg.configure(bg=BG)
-        dlg.geometry("320x180")
+        set_adaptive_geometry(dlg, w_ratio=0.24, h_ratio=0.24, min_w=320, min_h=180, max_w=420, max_h=260)
         dlg.resizable(False, False)
         dlg.grab_set()
 
@@ -1312,7 +1357,7 @@ class ExperimentOneTab:
         win = tk.Toplevel(self.frame.winfo_toplevel())
         win.title("{}数据表".format(self.experiment_name))
         win.configure(bg=BG)
-        win.geometry("620x360")
+        set_adaptive_geometry(win, w_ratio=0.5, h_ratio=0.48, min_w=620, min_h=360, max_w=980, max_h=680)
         win.resizable(True, True)
         self.table_win = win
 
@@ -1353,7 +1398,7 @@ class ExperimentOneTab:
         win = tk.Toplevel(self.frame.winfo_toplevel())
         win.title("{}特性曲线".format(self.experiment_name))
         win.configure(bg=BG)
-        win.geometry("980x460")
+        set_adaptive_geometry(win, w_ratio=0.72, h_ratio=0.62, min_w=900, min_h=440, max_w=1500, max_h=920)
         win.resizable(True, True)
         self.curve_win = win
 
@@ -1742,7 +1787,7 @@ class ExperimentOneTab:
         dlg = tk.Toplevel(self.frame.winfo_toplevel())
         dlg.title("修改数据")
         dlg.configure(bg=BG)
-        dlg.geometry("320x170")
+        set_adaptive_geometry(dlg, w_ratio=0.24, h_ratio=0.22, min_w=320, min_h=170, max_w=420, max_h=240)
         dlg.resizable(False, False)
         dlg.grab_set()
 
@@ -2105,7 +2150,7 @@ class ExperimentOneTab:
             win = tk.Toplevel(self.frame.winfo_toplevel())
             win.title("数据分析结果")
             win.configure(bg=BG)
-            win.geometry("520x360")
+            set_adaptive_geometry(win, w_ratio=0.38, h_ratio=0.42, min_w=500, min_h=340, max_w=900, max_h=720)
             win.resizable(False, False)
 
             tk.Label(win, text="数据分析结果", bg=ACCENT, fg="#fff",
@@ -2151,7 +2196,7 @@ class ExperimentOneTab:
         win = tk.Toplevel(self.frame.winfo_toplevel())
         win.title("数据分析结果")
         win.configure(bg=BG)
-        win.geometry("520x440")
+        set_adaptive_geometry(win, w_ratio=0.4, h_ratio=0.5, min_w=500, min_h=420, max_w=920, max_h=820)
         win.resizable(False, False)
 
         tk.Label(win, text="数据分析结果", bg=ACCENT, fg="#fff",
@@ -2352,6 +2397,8 @@ class ExperimentTab:
 
     def __init__(self, parent_frame, title, experiment_type="distance"):
         self.frame = parent_frame
+        top = self.frame.winfo_toplevel()
+        self.screen_w = int(top.winfo_screenwidth() or 1920)
         self.title = title
         self.experiment_type = experiment_type
         self.params = {k: v for k, v in DEFAULT_PARAMS["single"].items()}
@@ -2366,7 +2413,8 @@ class ExperimentTab:
     def _build(self):
         body = tk.Frame(self.frame, bg=BG)
         body.pack(fill=tk.BOTH, expand=True)
-        mid = tk.Frame(body, bg=PANEL_BG, width=420)
+        mid_w = clamp(int(self.screen_w * 0.24), 300, 460)
+        mid = tk.Frame(body, bg=PANEL_BG, width=mid_w)
         mid.pack(side=tk.LEFT, fill=tk.Y, padx=(0, 6))
         mid.pack_propagate(False)
         right = tk.Frame(body, bg=BG)
@@ -2727,13 +2775,16 @@ class EssayTab:
 
     def __init__(self, parent_frame):
         self.frame = parent_frame
+        top = self.frame.winfo_toplevel()
+        self.screen_w = int(top.winfo_screenwidth() or 1920)
         self._build()
 
     def _build(self):
         wrap = tk.Frame(self.frame, bg=BG)
         wrap.pack(fill=tk.BOTH, expand=True, padx=0, pady=0)
 
-        left = tk.Frame(wrap, bg=PANEL_BG, width=160)
+        left_w = clamp(int(self.screen_w * 0.1), 140, 220)
+        left = tk.Frame(wrap, bg=PANEL_BG, width=left_w)
         left.pack(side=tk.LEFT, fill=tk.Y, padx=(0, 10))
         left.pack_propagate(False)
         right = tk.Frame(wrap, bg=BG)
@@ -2906,9 +2957,13 @@ class SolarCellApp:
     def __init__(self, root):
         self.root = root
         self.root.title("太阳能电池特性测量")
-        self.root.geometry("1820x900")
+        sw = int(self.root.winfo_screenwidth() or 1920)
+        sh = int(self.root.winfo_screenheight() or 1080)
+        w = clamp(int(sw * 0.92), 1180, 1920)
+        h = clamp(int(sh * 0.88), 700, 1080)
+        self.root.geometry(f"{w}x{h}")
         self.root.configure(bg=BG)
-        self.root.minsize(1560, 760)
+        self.root.minsize(1100, 680)
         configure_ttk_theme(self.root)
         self._build_ui()
 
@@ -2921,6 +2976,8 @@ class SolarCellApp:
                  font=("Microsoft YaHei", 13, "bold")).pack(side=tk.LEFT, padx=12)
         right = tk.Frame(header, bg=ACCENT)
         right.pack(side=tk.RIGHT, padx=8)
+        ttk.Button(right, text="设置", style="Assist.TButton",
+                   command=self._open_settings).pack(side=tk.LEFT, padx=(0, 4))
         ttk.Button(right, text="工具箱", style="Assist.TButton",
                    command=self._open_toolbox).pack(side=tk.LEFT, padx=(0, 4))
         ttk.Button(right, text="帮助", style="Assist.TButton",
@@ -2949,6 +3006,36 @@ class SolarCellApp:
         if idx == 1:
             return "exp2"
         return "ext"
+
+    def _apply_resolution(self, size_key):
+        sw = int(self.root.winfo_screenwidth() or 1920)
+        sh = int(self.root.winfo_screenheight() or 1080)
+        presets = {
+            "small": (1280, 720),
+            "medium": (1600, 900),
+            "large": (1920, 1080),
+            "auto": (clamp(int(sw * 0.92), 1180, 1920), clamp(int(sh * 0.88), 700, 1080)),
+        }
+        w, h = presets.get(size_key, presets["auto"])
+        w = min(w, sw)
+        h = min(h, sh)
+        self.root.geometry(f"{int(w)}x{int(h)}")
+        self.root.update_idletasks()
+
+    def _open_settings(self):
+        menu = tk.Menu(self.root, tearoff=0, bg="#f7f7f7", fg="#111111",
+                       activebackground="#d9ecff", activeforeground="#000000")
+        res_menu = tk.Menu(menu, tearoff=0, bg="#f7f7f7", fg="#111111",
+                           activebackground="#d9ecff", activeforeground="#000000")
+        res_menu.add_command(label="小 (1280×720)", command=lambda: self._apply_resolution("small"))
+        res_menu.add_command(label="中 (1600×900)", command=lambda: self._apply_resolution("medium"))
+        res_menu.add_command(label="大 (1920×1080)", command=lambda: self._apply_resolution("large"))
+        menu.add_cascade(label="调整分辨率", menu=res_menu)
+        try:
+            x, y = self.root.winfo_pointerxy()
+            menu.tk_popup(x, y)
+        finally:
+            menu.grab_release()
 
     def _open_toolbox(self):
         menu = tk.Menu(self.root, tearoff=0, bg="#f7f7f7", fg="#111111",
@@ -2980,7 +3067,7 @@ class SolarCellApp:
         win = tk.Toplevel(self.root)
         win.title("帮助")
         win.configure(bg=BG)
-        win.geometry("460x260")
+        set_adaptive_geometry(win, w_ratio=0.34, h_ratio=0.34, min_w=440, min_h=240, max_w=760, max_h=520)
         win.resizable(False, False)
 
         tk.Label(win, text="使用说明", bg=ACCENT, fg="#fff",
