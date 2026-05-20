@@ -1973,16 +1973,19 @@ class ExperimentOneTab:
                 return np.array([]), np.array([])
             x_arr = np.array(xs, dtype=float)
             y_arr = np.array(ys, dtype=float)
+            order = np.argsort(x_arr)
+            x_arr = x_arr[order]
+            y_arr = y_arr[order]
             xmin, xmax = float(x_arr.min()), float(x_arr.max())
-            # 两段补点：中段少量，末端密集（解决最右下角稀疏）
-            x1_start = xmin + 0.88 * (xmax - xmin)
-            x1_end = xmin + 0.945 * (xmax - xmin)
+            # 右侧补点：上段少、末端密（避免上边过密，补足最右下角）
+            x1_start = xmin + 0.90 * (xmax - xmin)
+            x1_end = xmin + 0.96 * (xmax - xmin)
             x2_start = x1_end
             x2_end = xmax
-            n_mid = max(3, int(extra_n * 0.35))
+            n_mid = max(2, int(extra_n * 0.25))
             n_tail = max(6, extra_n - n_mid)
             t1 = np.linspace(0.0, 1.0, n_mid) ** 1.3
-            t2 = np.linspace(0.0, 1.0, n_tail) ** 3.2
+            t2 = np.linspace(0.0, 1.0, n_tail) ** 2.8
             x_mid = x1_start + (x1_end - x1_start) * t1
             x_tail = x2_start + (x2_end - x2_start) * t2
             x_extra = np.concatenate((x_mid, x_tail))
@@ -2049,7 +2052,10 @@ class ExperimentOneTab:
         u_mark = Us_sorted
         i_mark = Is_curve if not self.is_distance_experiment else Is_sorted
         if not self.is_distance_experiment:
-            ux, ix = _extra_points_right(Us_sorted, Is_curve, extra_n=12)
+            # 补点直接沿当前显示曲线取样，确保点落在曲线上
+            src_x = x_fit if self.curve_fit_mode_1 else x_show
+            src_y = y_fit if self.curve_fit_mode_1 else y_show
+            ux, ix = _extra_points_right(src_x, src_y, extra_n=12)
             u_mark, i_mark = _merge_points(Us_sorted, Is_curve, ux, ix)
         if not self.curve_fit_mode_1:
             self.ax1.plot(u_mark, i_mark, "o", color=ACCENT, markersize=4)
@@ -2074,7 +2080,9 @@ class ExperimentOneTab:
         u2_mark = Us_sorted2
         p_mark = Ps_sorted
         if not self.is_distance_experiment:
-            ux2, px2 = _extra_points_right(Us_sorted2, Ps_sorted, extra_n=12)
+            src_x2 = x_fit2 if self.curve_fit_mode_2 else x_show2
+            src_y2 = y_fit2 if self.curve_fit_mode_2 else y_show2
+            ux2, px2 = _extra_points_right(src_x2, src_y2, extra_n=12)
             u2_mark, p_mark = _merge_points(Us_sorted2, Ps_sorted, ux2, px2)
         if not self.curve_fit_mode_2:
             self.ax2.plot(u2_mark, p_mark, "s", color=ACCENT2, markersize=4)
