@@ -829,8 +829,10 @@ class ExperimentOneTab:
         self._update_distance_reading_preview(self.distance_cm)
 
         if self.is_distance_experiment:
-            ttk.Button(body, text="【实验二】记录当前数据", style="Primary.TButton",
-                       command=self._record_point).pack(fill=tk.X, pady=(10, 0), ipady=1)
+            btn_row = tk.Frame(body, bg=BG)
+            btn_row.pack(fill=tk.X, pady=(10, 0))
+            ttk.Button(btn_row, text="【实验二】记录当前数据", style="Primary.TButton",
+                       command=self._record_point).pack(fill=tk.X, expand=True, ipady=2)
 
         dlg.protocol("WM_DELETE_WINDOW", self._close_distance_dialog)
 
@@ -3019,8 +3021,19 @@ class SolarCellApp:
         w, h = presets.get(size_key, presets["auto"])
         w = min(w, sw)
         h = min(h, sh)
+        # Windows 上若窗口处于 zoomed/maximized，直接 geometry 常不生效
+        try:
+            self.root.state("normal")
+        except Exception:
+            pass
+        try:
+            self.root.attributes("-zoomed", False)
+        except Exception:
+            pass
         self.root.geometry(f"{int(w)}x{int(h)}")
         self.root.update_idletasks()
+        # 再次设置一遍，规避部分机型首帧被系统覆盖
+        self.root.after(30, lambda: self.root.geometry(f"{int(w)}x{int(h)}"))
 
     def _open_settings(self):
         menu = tk.Menu(self.root, tearoff=0, bg="#f7f7f7", fg="#111111",
@@ -3030,7 +3043,13 @@ class SolarCellApp:
         res_menu.add_command(label="小 (1280×720)", command=lambda: self._apply_resolution("small"))
         res_menu.add_command(label="中 (1600×900)", command=lambda: self._apply_resolution("medium"))
         res_menu.add_command(label="大 (1920×1080)", command=lambda: self._apply_resolution("large"))
+        res_menu.add_separator()
+        res_menu.add_command(label="跟随屏幕（推荐）", command=lambda: self._apply_resolution("auto"))
         menu.add_cascade(label="调整分辨率", menu=res_menu)
+        cw = int(self.root.winfo_width() or 0)
+        ch = int(self.root.winfo_height() or 0)
+        menu.add_separator()
+        menu.add_command(label=f"当前窗口: {cw}×{ch}", state="disabled")
         try:
             x, y = self.root.winfo_pointerxy()
             menu.tk_popup(x, y)
