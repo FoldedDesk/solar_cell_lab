@@ -7,6 +7,8 @@
 
 import tkinter as tk
 from tkinter import ttk, filedialog, messagebox
+import ctypes
+import io
 import numpy as np
 import matplotlib
 matplotlib.use("TkAgg")
@@ -15,6 +17,10 @@ from matplotlib.backends.backend_tkagg import FigureCanvasTkAgg
 import matplotlib.font_manager as fm
 from scipy.interpolate import PchipInterpolator
 from PIL import Image, ImageTk
+try:
+    import cairosvg
+except Exception:
+    cairosvg = None
 
 # macOS/Windows 中文兼容字体回退
 plt_font = fm.FontProperties(family=[
@@ -40,6 +46,39 @@ R_MAX = 99999.9
 
 def clamp(v, lo, hi):
     return max(lo, min(hi, v))
+
+
+def calc_ui_scale(sw, sh):
+    return clamp(min(sw / 1920.0, sh / 1080.0), 1.0, 2.0)
+
+
+def get_window_monitor_size(win):
+    try:
+        hwnd = win.winfo_id()
+        user32 = ctypes.windll.user32
+        MONITOR_DEFAULTTONEAREST = 2
+        hmon = user32.MonitorFromWindow(hwnd, MONITOR_DEFAULTTONEAREST)
+        if not hmon:
+            raise RuntimeError("no monitor")
+
+        class RECT(ctypes.Structure):
+            _fields_ = [("left", ctypes.c_long), ("top", ctypes.c_long), ("right", ctypes.c_long), ("bottom", ctypes.c_long)]
+
+        class MONITORINFO(ctypes.Structure):
+            _fields_ = [("cbSize", ctypes.c_ulong), ("rcMonitor", RECT), ("rcWork", RECT), ("dwFlags", ctypes.c_ulong)]
+
+        mi = MONITORINFO()
+        mi.cbSize = ctypes.sizeof(MONITORINFO)
+        ok = user32.GetMonitorInfoW(hmon, ctypes.byref(mi))
+        if not ok:
+            raise RuntimeError("GetMonitorInfoW failed")
+        w = int(mi.rcWork.right - mi.rcWork.left)
+        h = int(mi.rcWork.bottom - mi.rcWork.top)
+        if w > 0 and h > 0:
+            return w, h
+    except Exception:
+        pass
+    return int(win.winfo_screenwidth() or 1920), int(win.winfo_screenheight() or 1080)
 
 
 def set_adaptive_geometry(win, w_ratio=0.5, h_ratio=0.5, min_w=320, min_h=220, max_w=None, max_h=None):
@@ -72,7 +111,7 @@ def bind_numeric_entry(entry, allow_decimal=True):
     vcmd = (entry.register(_on_validate), "%P")
     entry.configure(validate="key", validatecommand=vcmd)
 
-def configure_ttk_theme(root):
+def configure_ttk_theme(root, ui_scale=1.0, font_scale=1.0):
     """统一 ttk 在 Windows/macOS 的可读性，避免 mac 下白底浅字。"""
     style = ttk.Style(root)
     # Windows 的 vista/xpnative 主题常忽略按钮背景，但会吃前景色，容易出现白底白字。
@@ -86,29 +125,52 @@ def configure_ttk_theme(root):
     style.configure("TFrame", background=BG)
     style.configure("TLabel", background=BG, foreground=FG)
     style.configure("TNotebook", background=BG, borderwidth=0)
-    style.configure("TNotebook.Tab", background=PANEL_BG, foreground=FG, padding=(12, 6))
+    tab_pad_x = int(14 * ui_scale)
+    tab_pad_y = int(8 * ui_scale)
+    style.configure(
+        "TNotebook.Tab",
+        background=PANEL_BG,
+        foreground=FG,
+        padding=(tab_pad_x, tab_pad_y),
+        font=("Microsoft YaHei", max(12, int(12 * font_scale))),
+    )
     style.map(
         "TNotebook.Tab",
         background=[("selected", "#e9f4fa"), ("active", "#dcecf5")],
         foreground=[("selected", "#102235"), ("active", "#1b3b5a")],
     )
-    style.configure("Treeview", background="#f2f4f7", fieldbackground="#f2f4f7", foreground="#111")
-    style.configure("Treeview.Heading", background=PANEL_BG, foreground="#12283d")
+    style.configure(
+        "Treeview",
+        background="#f2f4f7",
+        fieldbackground="#f2f4f7",
+        foreground="#111",
+        rowheight=max(28, int(30 * ui_scale)),
+        font=("Microsoft YaHei", max(12, int(12 * font_scale))),
+    )
+    style.configure(
+        "Treeview.Heading",
+        background=PANEL_BG,
+        foreground="#12283d",
+        font=("Microsoft YaHei", max(12, int(12 * font_scale)), "bold"),
+    )
     style.map("Treeview", background=[("selected", "#cddff0")], foreground=[("selected", "#111")])
     # 彩色按钮样式（跨平台可控）
-    style.configure("Primary.TButton", background="#2a6", foreground="#ffffff", padding=(10, 6), borderwidth=1)
+    btn_pad_x = int(14 * ui_scale)
+    btn_pad_y = int(10 * ui_scale)
+    btn_font = ("Microsoft YaHei", max(13, int(13 * font_scale)))
+    style.configure("Primary.TButton", background="#2a6", foreground="#ffffff", padding=(btn_pad_x, btn_pad_y), borderwidth=1, font=btn_font)
     style.map(
         "Primary.TButton",
         background=[("active", "#3b7"), ("disabled", "#b9d8c7")],
         foreground=[("disabled", "#5f6b63"), ("!disabled", "#ffffff")],
     )
-    style.configure("Info.TButton", background="#2266cc", foreground="#ffffff", padding=(10, 6), borderwidth=1)
+    style.configure("Info.TButton", background="#2266cc", foreground="#ffffff", padding=(btn_pad_x, btn_pad_y), borderwidth=1, font=btn_font)
     style.map(
         "Info.TButton",
         background=[("active", "#3377dd"), ("disabled", "#bfd0ec")],
         foreground=[("disabled", "#5a6472"), ("!disabled", "#ffffff")],
     )
-    style.configure("Assist.TButton", background="#4455aa", foreground="#ffffff", padding=(10, 6), borderwidth=1)
+    style.configure("Assist.TButton", background="#4455aa", foreground="#ffffff", padding=(btn_pad_x, btn_pad_y), borderwidth=1, font=btn_font)
     style.map(
         "Assist.TButton",
         background=[("active", "#5566bb"), ("disabled", "#c6cce4")],
@@ -144,6 +206,7 @@ class _ManualInputDialog:
 
     def __init__(self, parent, R):
         self.result = None
+        self.font_scale = getattr(parent.winfo_toplevel(), "font_scale", 1.25)
         self.top = tk.Toplevel(parent)
         self.top.title("手动输入测量数据")
         self.top.configure(bg=BG)
@@ -152,18 +215,18 @@ class _ManualInputDialog:
         self.top.grab_set()
 
         tk.Label(self.top, text="记录数据点", bg=ACCENT, fg="#fff",
-                 font=("Microsoft YaHei", 13, "bold")).pack(fill=tk.X, ipady=6)
+                 font=("Microsoft YaHei", max(18, int(18 * self.font_scale)), "bold")).pack(fill=tk.X, ipady=6)
 
         tk.Label(self.top, text="当前电阻 R = {:g} Ω".format(R),
-                 bg=BG, fg="#aaa", font=("Microsoft YaHei", 10)).pack(pady=(10, 12))
+                 bg=BG, fg="#aaa", font=("Microsoft YaHei", max(12, int(12 * self.font_scale)))).pack(pady=(10, 12))
 
         # U 输入
         f1 = tk.Frame(self.top, bg=BG)
         f1.pack(fill=tk.X, padx=30, pady=4)
         tk.Label(f1, text="电压 U (V):", bg=BG, fg=FG,
-                 font=("Microsoft YaHei", 11), width=12, anchor="e").pack(side=tk.LEFT)
+                 font=("Microsoft YaHei", max(13, int(13 * self.font_scale))), width=12, anchor="e").pack(side=tk.LEFT)
         self.u_var = tk.StringVar(value="")
-        self.u_entry = tk.Entry(f1, textvariable=self.u_var, font=("Consolas", 13),
+        self.u_entry = tk.Entry(f1, textvariable=self.u_var, font=("Consolas", max(16, int(16 * self.font_scale))),
                                 bg="#1a1a1a", fg="#00ff88", insertbackground="#00ff88",
                                 width=12, relief=tk.SUNKEN, bd=2)
         bind_numeric_entry(self.u_entry, allow_decimal=True)
@@ -174,9 +237,9 @@ class _ManualInputDialog:
         f2 = tk.Frame(self.top, bg=BG)
         f2.pack(fill=tk.X, padx=30, pady=4)
         tk.Label(f2, text="电流 I (mA):", bg=BG, fg=FG,
-                 font=("Microsoft YaHei", 11), width=12, anchor="e").pack(side=tk.LEFT)
+                 font=("Microsoft YaHei", max(13, int(13 * self.font_scale))), width=12, anchor="e").pack(side=tk.LEFT)
         self.i_var = tk.StringVar(value="")
-        self.i_entry = tk.Entry(f2, textvariable=self.i_var, font=("Consolas", 13),
+        self.i_entry = tk.Entry(f2, textvariable=self.i_var, font=("Consolas", max(16, int(16 * self.font_scale))),
                                 bg="#1a1a1a", fg="#00ff88", insertbackground="#00ff88",
                                 width=12, relief=tk.SUNKEN, bd=2)
         bind_numeric_entry(self.i_entry, allow_decimal=True)
@@ -218,7 +281,7 @@ class _ManualInputDialog:
             if isinstance(w, tk.Label) and w.cget("bg") == "#ff4444":
                 w.destroy()
         tk.Label(self.top, text=msg, bg="#ff4444", fg="#fff",
-                 font=("Microsoft YaHei", 10, "bold")).pack(fill=tk.X)
+                 font=("Microsoft YaHei", max(13, int(13 * self.font_scale)), "bold")).pack(fill=tk.X)
 
 
 # ═══════════════════════════════════════════════
@@ -233,6 +296,8 @@ class ExperimentOneTab:
         top = self.frame.winfo_toplevel()
         self.screen_w = int(top.winfo_screenwidth() or 1920)
         self.screen_h = int(top.winfo_screenheight() or 1080)
+        self.ui_scale = getattr(top, "ui_scale", calc_ui_scale(self.screen_w, self.screen_h))
+        self.font_scale = getattr(top, "font_scale", max(self.ui_scale, 1.25))
         self.experiment_name = experiment_name
         self.is_distance_experiment = (self.experiment_name == "实验二")
         self.title = "改变负载电阻"
@@ -273,6 +338,7 @@ class ExperimentOneTab:
         self._asset_src = {}
         self._asset_cache = {}
         self._asset_tk_refs = {}
+        self._asset_fit_bounds = {}
         self.curve_fit_mode_1 = False
         self.curve_fit_mode_2 = False
         self.curve_btn1 = None
@@ -289,6 +355,18 @@ class ExperimentOneTab:
         self.device_term_offsets = {
             "panel": {"panel_p": (0, 22), "panel_n": (122, 48)},
         }
+        self.device_scale = max(self.ui_scale, 1.35)
+        for dev in self.devices.values():
+            dev["x"] = int(dev["x"] * self.device_scale)
+            dev["y"] = int(dev["y"] * self.device_scale)
+            dev["w"] = int(dev["w"] * self.device_scale)
+            dev["h"] = int(dev["h"] * self.device_scale)
+        panel = self.devices.get("panel")
+        if panel:
+            self.device_term_offsets["panel"] = {
+                "panel_p": (0, int(panel["h"] * (22.0 / 78.0))),
+                "panel_n": (panel["w"], int(panel["h"] * (48.0 / 78.0))),
+            }
         self.device_icon_bounds = {}
         self._load_scene_assets()
         self._build()
@@ -296,14 +374,25 @@ class ExperimentOneTab:
     def _load_scene_assets(self):
         base = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "res")
         mapping = {
-            "amm": os.path.join(base, "ammeter_256.png"),
-            "vol": os.path.join(base, "voltmeter_256.png"),
-            "res": os.path.join(base, "resistance_box_256.png"),
+            "amm": {"svg": os.path.join(base, "ammeter_256.svg"), "png": os.path.join(base, "ammeter_256.png")},
+            "vol": {"svg": os.path.join(base, "voltmeter_256.svg"), "png": os.path.join(base, "voltmeter_256.png")},
+            "res": {"svg": os.path.join(base, "resistance_box_256.svg"), "png": os.path.join(base, "resistance_box_256.png")},
         }
-        for k, p in mapping.items():
-            if os.path.exists(p):
+        for k, asset in mapping.items():
+            svg_path = asset["svg"]
+            png_path = asset["png"]
+            if os.path.exists(svg_path) and cairosvg is not None:
                 try:
-                    self._asset_src[k] = Image.open(p).convert("RGBA")
+                    with open(svg_path, "rb") as f:
+                        svg_bytes = f.read()
+                    png_bytes = cairosvg.svg2png(bytestring=svg_bytes, output_width=512, output_height=512)
+                    self._asset_src[k] = Image.open(io.BytesIO(png_bytes)).convert("RGBA")
+                    continue
+                except Exception:
+                    pass
+            if os.path.exists(png_path):
+                try:
+                    self._asset_src[k] = Image.open(png_path).convert("RGBA")
                 except Exception:
                     pass
 
@@ -327,12 +416,13 @@ class ExperimentOneTab:
         img.paste(fitted, (ox, oy), fitted)
         tk_img = ImageTk.PhotoImage(img)
         self._asset_tk_refs[size_key] = tk_img
+        self._asset_fit_bounds[size_key] = (ox, oy, nw, nh)
         return tk_img
 
     def _build(self):
         body = tk.Frame(self.frame, bg=BG)
         body.pack(fill=tk.BOTH, expand=True)
-        right_w = clamp(int(self.screen_w * 0.28), 340, 520)
+        right_w = clamp(int(self.screen_w * 0.28), int(340 * self.ui_scale), int(640 * self.ui_scale))
         right = tk.Frame(body, bg=PANEL_BG, width=right_w)
         right.pack(side=tk.RIGHT, fill=tk.Y)
         right.pack_propagate(False)
@@ -346,20 +436,20 @@ class ExperimentOneTab:
     def _build_control(self, parent):
         # 电池类型（仅单晶硅，无选择）
         tk.Label(parent, text="电池类型", bg=PANEL_BG, fg=FG,
-                 font=("Microsoft YaHei", 10, "bold")).pack(anchor="w", padx=10, pady=(10, 2))
+                 font=("Microsoft YaHei", max(13, int(13 * self.font_scale)), "bold")).pack(anchor="w", padx=10, pady=(10, 2))
         tf = tk.Frame(parent, bg=PANEL_BG)
         tf.pack(fill=tk.X, padx=10)
         self.cell_type_var = tk.StringVar(value="single")
         tk.Label(tf, text="单晶硅", bg=PANEL_BG, fg=FG,
-                 font=("Microsoft YaHei", 9)).pack(side=tk.LEFT, padx=5)
+                 font=("Microsoft YaHei", max(12, int(12 * self.font_scale)))).pack(side=tk.LEFT, padx=5)
         ttk.Separator(parent, orient="horizontal").pack(fill=tk.X, padx=10, pady=6)
 
         # 当前电阻值（由实验台双击电阻箱调整）
         tk.Label(parent, text="━━━ 负载电阻 ━━━", bg=PANEL_BG, fg=ACCENT,
-                 font=("Microsoft YaHei", 10, "bold")).pack(anchor="w", padx=10, pady=(0, 2))
+                 font=("Microsoft YaHei", max(13, int(13 * self.font_scale)), "bold")).pack(anchor="w", padx=10, pady=(0, 2))
         self.r_readonly_label = tk.Label(parent, text="R = 0.0 Ω（双击实验台电阻箱修改）",
                                          bg="#1e1e1e", fg="#00ff88",
-                                         font=("Consolas", 11, "bold"),
+                                         font=("Consolas", max(14, int(14 * self.font_scale)), "bold"),
                                          relief=tk.SUNKEN, bd=1, padx=8, pady=6)
         self.r_readonly_label.pack(fill=tk.X, padx=10, pady=(2, 6))
 
@@ -367,32 +457,32 @@ class ExperimentOneTab:
         info = tk.Frame(parent, bg=PANEL_BG)
         info.pack(fill=tk.X, padx=10, pady=4)
         tk.Label(info, text="固定条件:", bg=PANEL_BG, fg="#888",
-                 font=("Microsoft YaHei", 9)).pack(anchor="w")
+                 font=("Microsoft YaHei", max(12, int(12 * self.font_scale)))).pack(anchor="w")
         if self.is_distance_experiment:
             tk.Label(info, text="  距离 d: 可调（双击太阳能板）", bg=PANEL_BG, fg=FG,
-                     font=("Microsoft YaHei", 9)).pack(anchor="w")
+                     font=("Microsoft YaHei", max(12, int(12 * self.font_scale)))).pack(anchor="w")
             tk.Label(info, text="  初始光强 I: {:.1f} W/m²".format(self.light_intensity), bg=PANEL_BG, fg=FG,
-                     font=("Microsoft YaHei", 9)).pack(anchor="w")
+                     font=("Microsoft YaHei", max(12, int(12 * self.font_scale)))).pack(anchor="w")
             tk.Label(info, text="  提示: 每个距离需分两次接线测 Isc 和 Voc", bg=PANEL_BG, fg="#8a4b08",
-                     font=("Microsoft YaHei", 9, "bold")).pack(anchor="w")
+                     font=("Microsoft YaHei", max(12, int(12 * self.font_scale)), "bold")).pack(anchor="w")
         else:
             tk.Label(info, text="  光强 I: 242 W/m²", bg=PANEL_BG, fg=FG,
-                     font=("Microsoft YaHei", 9)).pack(anchor="w")
+                     font=("Microsoft YaHei", max(12, int(12 * self.font_scale)))).pack(anchor="w")
         tk.Label(info, text="  受光面积 A: 0.010 m²", bg=PANEL_BG, fg=FG,
-                 font=("Microsoft YaHei", 9)).pack(anchor="w")
+                 font=("Microsoft YaHei", max(12, int(12 * self.font_scale)))).pack(anchor="w")
 
         core = tk.Frame(parent, bg="#1a2238", bd=1, relief=tk.SOLID)
         core.pack(fill=tk.X, padx=10, pady=(4, 2))
         tk.Label(core, text="核心原理：光功率 -> 电功率", bg="#24345f", fg="#dfe9ff",
-                 font=("Microsoft YaHei", 9, "bold")).pack(fill=tk.X, ipady=2)
+                 font=("Microsoft YaHei", max(12, int(12 * self.font_scale)), "bold")).pack(fill=tk.X, ipady=2)
         self.core_pin_lbl = tk.Label(core, text="入射光功率 Pin = -- W", bg="#1a2238", fg="#9fc3ff",
-                                     font=("Consolas", 10, "bold"), anchor="w")
+                                     font=("Consolas", max(14, int(14 * self.font_scale)), "bold"), anchor="w")
         self.core_pin_lbl.pack(fill=tk.X, padx=6, pady=(4, 1))
         self.core_pout_lbl = tk.Label(core, text="输出电功率 Pout = -- W", bg="#1a2238", fg="#8dffb7",
-                                      font=("Consolas", 10, "bold"), anchor="w")
+                                      font=("Consolas", max(14, int(14 * self.font_scale)), "bold"), anchor="w")
         self.core_pout_lbl.pack(fill=tk.X, padx=6, pady=1)
         self.core_eta_lbl = tk.Label(core, text="转换效率 η = -- %", bg="#1a2238", fg="#ffd38a",
-                                     font=("Consolas", 10, "bold"), anchor="w")
+                                     font=("Consolas", max(14, int(14 * self.font_scale)), "bold"), anchor="w")
         self.core_eta_lbl.pack(fill=tk.X, padx=6, pady=(1, 5))
         self._update_core_principle(0.0, 0.0)
 
@@ -402,7 +492,7 @@ class ExperimentOneTab:
             mode_box = tk.Frame(parent, bg=PANEL_BG)
             mode_box.pack(fill=tk.X, padx=10, pady=(0, 6))
             tk.Label(mode_box, text="实验二测量模式", bg=PANEL_BG, fg=ACCENT,
-                     font=("Microsoft YaHei", 10, "bold")).pack(anchor="w")
+                     font=("Microsoft YaHei", max(13, int(13 * self.font_scale)), "bold")).pack(anchor="w")
             mode_btns = tk.Frame(mode_box, bg=PANEL_BG)
             mode_btns.pack(fill=tk.X, pady=(2, 0))
             ttk.Button(mode_btns, text="测短路电流 Isc", style="Assist.TButton",
@@ -429,15 +519,15 @@ class ExperimentOneTab:
     def _build_wiring_scene(self, parent, large=False, show_button=True):
         self.scene_host = parent
         tk.Label(parent, text="━━━ 实验接线场景 ━━━", bg=BG, fg="#114a76",
-                 font=("Microsoft YaHei", 11, "bold")).pack(anchor="w", padx=10, pady=(0, 2))
+                 font=("Microsoft YaHei", max(14, int(14 * self.font_scale)), "bold")).pack(anchor="w", padx=10, pady=(0, 2))
         self.wire_status = tk.Label(parent, text="接线状态: 未完成", bg=BG, fg="#9a4f00",
-                                    font=("Microsoft YaHei", 10, "bold"))
+                                    font=("Microsoft YaHei", max(13, int(13 * self.font_scale)), "bold"))
         self.wire_status.pack(anchor="w", padx=10, pady=(0, 4))
 
         if large:
-            right_w = clamp(int(self.screen_w * 0.28), 340, 520)
-            cw = clamp(self.screen_w - right_w - 90, 620, 1180)
-            ch = clamp(self.screen_h - 250, 420, 760)
+            right_w = clamp(int(self.screen_w * 0.28), int(340 * self.ui_scale), int(640 * self.ui_scale))
+            cw = clamp(self.screen_w - right_w - int(90 * self.ui_scale), int(620 * self.ui_scale), int(1780 * self.ui_scale))
+            ch = clamp(self.screen_h - int(250 * self.ui_scale), int(420 * self.ui_scale), int(980 * self.ui_scale))
         else:
             cw, ch = (250, 320)
         self.scene_size = (cw, ch)
@@ -456,10 +546,10 @@ class ExperimentOneTab:
         timer_bar = tk.Frame(parent, bg=PANEL_BG)
         timer_bar.pack(fill=tk.X, padx=10, pady=(2, 6))
         tk.Label(timer_bar, text="实验已经进行:", bg=PANEL_BG, fg="#ba2f2f",
-                 font=("Microsoft YaHei", 10, "bold")).pack(side=tk.LEFT)
+                 font=("Microsoft YaHei", max(13, int(13 * self.font_scale)), "bold")).pack(side=tk.LEFT)
         self.timer_var = tk.StringVar(value="00:00:00")
         tk.Label(timer_bar, textvariable=self.timer_var, bg="#101010", fg="#ff2a2a",
-                 font=("Consolas", 16, "bold"), padx=8, pady=2).pack(side=tk.LEFT, padx=8)
+                 font=("Consolas", max(20, int(20 * self.font_scale)), "bold"), padx=8, pady=2).pack(side=tk.LEFT, padx=8)
         self._start_timer()
         self._draw_scene()
 
@@ -512,7 +602,7 @@ class ExperimentOneTab:
         self._build_wiring_scene(left, large=True, show_button=False)
         self._build_autowire_buttons(right, pady=(12, 6))
         tk.Label(right, text="右下角显示实时电路图", bg=PANEL_BG, fg="#a8bde6",
-                 font=("Microsoft YaHei", 10, "bold")).pack(anchor="w", padx=10, pady=(8, 4))
+                 font=("Microsoft YaHei", max(13, int(13 * self.font_scale)), "bold")).pack(anchor="w", padx=10, pady=(8, 4))
         self.circuit_canvas = tk.Canvas(win, width=320, height=250, bg="#f7f4e8",
                                         highlightthickness=1, highlightbackground="#2d3340")
         self.circuit_canvas.place(relx=1.0, rely=1.0, x=-14, y=-14, anchor="se")
@@ -529,11 +619,12 @@ class ExperimentOneTab:
         win.protocol("WM_DELETE_WINDOW", _on_close)
 
     def _add_device(self, x, y, w, h, title, fill):
+        title_h = max(24, int(24 * self.ui_scale))
         self.scene.create_rectangle(x + 3, y + 3, x + w + 3, y + h + 3, fill="#0a0f1c", outline="", width=0, tags=("device",))
         self.scene.create_rectangle(x, y, x + w, y + h, fill=fill, outline="#5f79a8", width=1, tags=("device",))
-        self.scene.create_rectangle(x + 1, y + 1, x + w - 1, y + 16, fill="#22365d", outline="", width=0, tags=("device",))
-        self.scene.create_text(x + w / 2, y + 9, text=title, fill="#e8f1ff",
-                               font=("Microsoft YaHei", 8, "bold"), tags=("device",))
+        self.scene.create_rectangle(x + 1, y + 1, x + w - 1, y + title_h, fill="#22365d", outline="", width=0, tags=("device",))
+        self.scene.create_text(x + w / 2, y + title_h / 2, text=title, fill="#e8f1ff",
+                               font=("Microsoft YaHei", max(12, int(12 * self.font_scale)), "bold"), tags=("device",))
 
     def _add_terminal(self, term_id, x, y, mark=""):
         r = 4
@@ -541,7 +632,7 @@ class ExperimentOneTab:
         self.scene.create_oval(x - r, y - r, x + r, y + r, fill="#ffd166", outline="#ffe7a6",
                                width=1, tags=("terminal", "term_" + term_id))
         if mark:
-            self.scene.create_text(x, y - 10, text=mark, fill="#9bb2dd", font=("Consolas", 8, "bold"))
+            self.scene.create_text(x, y - 10, text=mark, fill="#9bb2dd", font=("Consolas", max(12, int(12 * self.font_scale)), "bold"))
 
     def _draw_scene(self):
         if self.scene is None or not self.scene.winfo_exists():
@@ -565,7 +656,7 @@ class ExperimentOneTab:
         self.scene.create_rectangle(0, 0, cw, 26, fill="#0a79a9", outline="#075b7f", width=1)
         self.scene.create_rectangle(0, 0, cw, 6, fill="#3da8d1", outline="", width=0)
         self.scene.create_text(14, 13, text="太阳能电池的特性测量", anchor="w",
-                               fill="#e9f7ff", font=("Microsoft YaHei", 10, "bold"))
+                               fill="#e9f7ff", font=("Microsoft YaHei", max(13, int(13 * self.font_scale)), "bold"))
 
         # 实验台与桌面分层
         self.scene.create_rectangle(0, 26, cw, ch, fill="#d5d6d8", outline="", width=0)
@@ -582,15 +673,29 @@ class ExperimentOneTab:
         # 光源与太阳能板细节
         lamp = self.devices["lamp"]
         panel = self.devices["panel"]
-        self.scene.create_oval(lamp["x"] + 10, lamp["y"] + 10, lamp["x"] + 38, lamp["y"] + 38,
-                               fill="#ffd36a", outline="#ffe8a5", width=1)
-        self.scene.create_line(lamp["x"] + 42, lamp["y"] + 16, panel["x"] - 14, panel["y"] + 12, fill="#ffcf66", width=1)
-        self.scene.create_line(lamp["x"] + 42, lamp["y"] + 24, panel["x"] - 12, panel["y"] + 26, fill="#ffcf66", width=1)
-        self.scene.create_line(lamp["x"] + 42, lamp["y"] + 32, panel["x"] - 14, panel["y"] + 40, fill="#ffcf66", width=1)
-        self.scene.create_rectangle(panel["x"] + 18, panel["y"] + 22, panel["x"] + 86, panel["y"] + 56,
+        lamp_d = int(min(lamp["w"], lamp["h"]) * 0.54)
+        lamp_cx = lamp["x"] + lamp["w"] / 2
+        lamp_cy = lamp["y"] + lamp["h"] / 2 + 10
+        lamp_x0 = lamp_cx - lamp_d / 2
+        lamp_y0 = lamp_cy - lamp_d / 2
+        lamp_x1 = lamp_cx + lamp_d / 2
+        lamp_y1 = lamp_cy + lamp_d / 2
+        self.scene.create_oval(lamp_x0, lamp_y0, lamp_x1, lamp_y1, fill="#ffd36a", outline="#ffe8a5", width=1)
+        ray_x = lamp_x1 + max(6, int(6 * self.ui_scale))
+        self.scene.create_line(ray_x, lamp_cy - lamp_d * 0.28, panel["x"] - 14, panel["y"] + 12, fill="#ffcf66", width=1)
+        self.scene.create_line(ray_x, lamp_cy, panel["x"] - 12, panel["y"] + 26, fill="#ffcf66", width=1)
+        self.scene.create_line(ray_x, lamp_cy + lamp_d * 0.28, panel["x"] - 14, panel["y"] + 40, fill="#ffcf66", width=1)
+        panel_inner_w = int(panel["w"] * 0.56)
+        panel_inner_h = int(panel["h"] * 0.44)
+        panel_inner_x0 = panel["x"] + (panel["w"] - panel_inner_w) / 2
+        panel_inner_y0 = panel["y"] + int(panel["h"] * 0.28) + 10
+        panel_inner_x1 = panel_inner_x0 + panel_inner_w
+        panel_inner_y1 = panel_inner_y0 + panel_inner_h
+        self.scene.create_rectangle(panel_inner_x0, panel_inner_y0, panel_inner_x1, panel_inner_y1,
                                     fill="#204a68", outline="#4e87af", width=1)
-        for gx in (panel["x"] + 34, panel["x"] + 50, panel["x"] + 66):
-            self.scene.create_line(gx, panel["y"] + 23, gx, panel["y"] + 55, fill="#6fb4d8", width=1)
+        for ratio in (0.24, 0.50, 0.76):
+            gx = panel_inner_x0 + panel_inner_w * ratio
+            self.scene.create_line(gx, panel_inner_y0 + 1, gx, panel_inner_y1 - 1, fill="#6fb4d8", width=1)
 
         # 仪表/电阻箱细节
         amm = self.devices["amm"]
@@ -599,30 +704,42 @@ class ExperimentOneTab:
         # 用资源图替换电流表/电压表/电阻箱细节（优先）
         # 图标区固定为设备内部“正方形”区域并等比居中，避免任何方向拉伸
         def _draw_square_icon(dev_id, dev, key, fallback_draw_fn):
-            icon_size = max(20, min(int(dev["w"] - 10), int(dev["h"] - 20)))
-            icon_x = dev["x"] + (dev["w"] - icon_size) / 2
-            icon_y = dev["y"] + 16 + max(0, (dev["h"] - 16 - icon_size) / 2)
-            self.device_icon_bounds[dev_id] = (icon_x, icon_y, icon_size)
-            icon = self._get_device_asset(key, icon_size, icon_size)
+            title_h = max(24, int(24 * self.ui_scale))
+            icon_gap_top = max(10, int(10 * self.ui_scale))
+            icon_gap_bottom = max(8, int(8 * self.ui_scale))
+            icon_x_pad = max(4, int(4 * self.ui_scale))
+            icon_w = max(20, int(dev["w"] - icon_x_pad * 2))
+            icon_h = max(20, int(dev["h"] - title_h - icon_gap_top - icon_gap_bottom))
+            icon_x = dev["x"] + icon_x_pad
+            icon_y = dev["y"] + title_h + icon_gap_top
+            icon = self._get_device_asset(key, icon_w, icon_h)
             if icon is not None:
+                size_key = (key, int(icon_w), int(icon_h))
+                fit = self._asset_fit_bounds.get(size_key)
+                if fit is not None:
+                    ox, oy, nw, nh = fit
+                    self.device_icon_bounds[dev_id] = (icon_x + ox, icon_y + oy, nw, nh)
+                else:
+                    self.device_icon_bounds[dev_id] = (icon_x, icon_y, icon_w, icon_h)
                 self.scene.create_image(icon_x, icon_y, anchor="nw", image=icon, tags=("device",))
             else:
+                self.device_icon_bounds[dev_id] = (icon_x, icon_y, icon_w, icon_h)
                 fallback_draw_fn()
 
         def _draw_amm_fallback():
             self.scene.create_oval(amm["x"] + 14, amm["y"] + 10, amm["x"] + 58, amm["y"] + 44,
                                    fill="#0e1e18", outline="#6dd39b", width=1)
-            self.scene.create_text(amm["x"] + 36, amm["y"] + 28, text="A", fill="#8df0bf", font=("Consolas", 9, "bold"))
+            self.scene.create_text(amm["x"] + 36, amm["y"] + 28, text="A", fill="#8df0bf", font=("Consolas", max(10, int(10 * self.ui_scale)), "bold"))
 
         def _draw_res_fallback():
             self.scene.create_rectangle(res["x"] + 14, res["y"] + 14, res["x"] + 78, res["y"] + 34,
                                         fill="#0f131d", outline="#ff9f5f", width=1)
-            self.scene.create_text(res["x"] + 46, res["y"] + 24, text="R BOX", fill="#ffb27f", font=("Consolas", 8, "bold"))
+            self.scene.create_text(res["x"] + 46, res["y"] + 24, text="R BOX", fill="#ffb27f", font=("Consolas", max(10, int(10 * self.ui_scale)), "bold"))
 
         def _draw_vol_fallback():
             self.scene.create_oval(vol["x"] + 18, vol["y"] + 12, vol["x"] + 60, vol["y"] + 46,
                                    fill="#1b1836", outline="#9c8cff", width=1)
-            self.scene.create_text(vol["x"] + 39, vol["y"] + 29, text="V", fill="#b9abff", font=("Consolas", 9, "bold"))
+            self.scene.create_text(vol["x"] + 39, vol["y"] + 29, text="V", fill="#b9abff", font=("Consolas", max(10, int(10 * self.ui_scale)), "bold"))
 
         _draw_square_icon("amm", amm, "amm", _draw_amm_fallback)
         _draw_square_icon("res", res, "res", _draw_res_fallback)
@@ -636,18 +753,33 @@ class ExperimentOneTab:
                 self._add_terminal(term_id, d["x"] + ox, d["y"] + oy, sign)
 
         icon_terms = {
-            "amm": {"amm_p": (0.22, 0.80), "amm_n": (0.78, 0.80)},
-            "vol": {"vol_p": (0.22, 0.80), "vol_n": (0.78, 0.80)},
+            "amm": {"amm_p": (0.32, 0.93), "amm_n": (0.68, 0.93)},
+            "vol": {"vol_p": (0.32, 0.93), "vol_n": (0.68, 0.93)},
             # 电阻箱端子对齐到底部三个小圆点中的左右两点
-            "res": {"res_p": (0.26, 0.80), "res_n": (0.74, 0.80)},
+            "res": {"res_p": (0.32, 0.93), "res_n": (0.68, 0.93)},
         }
         for dev_id, tmap in icon_terms.items():
             if dev_id not in self.device_icon_bounds:
                 continue
-            ix, iy, isz = self.device_icon_bounds[dev_id]
+            ix, iy, iw, ih = self.device_icon_bounds[dev_id]
+            pts = {}
             for term_id, (rx, ry) in tmap.items():
+                pts[term_id] = [ix + iw * rx, iy + ih * ry]
+            p_key = [k for k in pts if k.endswith("_p")]
+            n_key = [k for k in pts if k.endswith("_n")]
+            if p_key and n_key:
+                kp, kn = p_key[0], n_key[0]
+                min_sep = max(18, int(14 * self.ui_scale))
+                dx = pts[kn][0] - pts[kp][0]
+                if abs(dx) < min_sep:
+                    mid = (pts[kp][0] + pts[kn][0]) / 2.0
+                    pts[kp][0] = mid - min_sep / 2.0
+                    pts[kn][0] = mid + min_sep / 2.0
+            for term_id, (tx, ty) in pts.items():
                 sign = "+" if term_id.endswith("_p") else "-"
-                self._add_terminal(term_id, ix + isz * rx, iy + isz * ry, sign)
+                x_shift = -9 if sign == "+" else 9
+                y_shift = -10
+                self._add_terminal(term_id, tx + x_shift, ty + y_shift, sign)
 
         self._redraw_wires()
         self._update_wire_status()
@@ -771,8 +903,9 @@ class ExperimentOneTab:
             self._update_distance_preview(self.distance_cm)
         # 在主实验台上同步太阳能板位置，形成“移动板子改距离”的视觉反馈
         lamp_center_x = self.devices["lamp"]["x"] + self.devices["lamp"]["w"] / 2.0
-        min_panel_x = 220.0
-        max_panel_x = 700.0
+        s = getattr(self, "device_scale", self.ui_scale)
+        min_panel_x = 220.0 * s
+        max_panel_x = 700.0 * s
         x_new = min_panel_x + (self.distance_cm - 5.0) / 95.0 * (max_panel_x - min_panel_x)
         w_panel = self.devices["panel"]["w"]
         self.devices["panel"]["x"] = int(max(min_panel_x, min(max_panel_x, x_new - w_panel / 2.0)))
@@ -798,29 +931,30 @@ class ExperimentOneTab:
         self.distance_win = dlg
 
         tk.Label(dlg, text="距离刻度台（滑动太阳能板）", bg=ACCENT, fg="#fff",
-                 font=("Microsoft YaHei", 12, "bold")).pack(fill=tk.X, ipady=6)
+                 font=("Microsoft YaHei", max(16, int(16 * self.font_scale)), "bold")).pack(fill=tk.X, ipady=6)
 
         body = tk.Frame(dlg, bg=BG)
         body.pack(fill=tk.BOTH, expand=True, padx=14, pady=10)
-        self.distance_preview_canvas = tk.Canvas(body, width=720, height=110, bg="#f6f9ff",
+        self.distance_preview_canvas = tk.Canvas(body, height=110, bg="#f6f9ff",
                                                  highlightthickness=1, highlightbackground="#6f8fb4")
         self.distance_preview_canvas.pack(fill=tk.X)
+        self.distance_preview_canvas.bind("<Configure>", self._on_distance_preview_resize)
         self._draw_distance_preview_base()
         self._update_distance_preview(self.distance_cm)
 
         lbl = tk.Frame(body, bg=BG)
         lbl.pack(fill=tk.X, pady=(8, 2))
         tk.Label(lbl, text="距离 d (cm):", bg=BG, fg=FG,
-                 font=("Microsoft YaHei", 10, "bold")).pack(side=tk.LEFT)
+                 font=("Microsoft YaHei", max(13, int(13 * self.font_scale)), "bold")).pack(side=tk.LEFT)
         self.distance_value_lbl = tk.Label(lbl, text="", bg=BG, fg="#255caa",
-                                           font=("Consolas", 12, "bold"))
+                                           font=("Consolas", max(16, int(16 * self.font_scale)), "bold"))
         self.distance_value_lbl.pack(side=tk.LEFT, padx=8)
         self.distance_vi_lbl = tk.Label(lbl, text="", bg=BG, fg="#0f5132",
-                                        font=("Consolas", 12, "bold"))
+                                        font=("Consolas", max(16, int(16 * self.font_scale)), "bold"))
         self.distance_vi_lbl.pack(side=tk.RIGHT)
 
         self.distance_scale = tk.Scale(body, from_=5, to=100, orient=tk.HORIZONTAL,
-                                       resolution=5, showvalue=False, length=700,
+                                       resolution=5, showvalue=False, length=1,
                                        bg=BG, fg=FG, highlightthickness=0,
                                        troughcolor="#bfd4ee",
                                        command=self._on_distance_scale_change)
@@ -843,16 +977,37 @@ class ExperimentOneTab:
         self.distance_scale = None
         self.distance_preview_canvas = None
         self.distance_indicator_id = None
+        self._distance_preview_bounds = None
+
+    def _distance_preview_range(self):
+        c = self.distance_preview_canvas
+        if c is None or not c.winfo_exists():
+            return 80, 680
+        cw = int(c.winfo_width() or c.winfo_reqwidth() or 720)
+        x0 = max(70, int(0.11 * cw))
+        x1 = min(cw - 40, int(0.92 * cw))
+        if x1 - x0 < 260:
+            x0, x1 = 80, max(360, cw - 40)
+        return x0, x1
+
+    def _on_distance_preview_resize(self, _event=None):
+        if self.distance_preview_canvas is None or not self.distance_preview_canvas.winfo_exists():
+            return
+        self._draw_distance_preview_base()
+        self._update_distance_preview(self.distance_cm)
+        if self.distance_scale is not None and self.distance_scale.winfo_exists():
+            usable = max(320, int(self.distance_preview_canvas.winfo_width()) - 24)
+            self.distance_scale.config(length=usable)
 
     def _draw_distance_preview_base(self):
         c = self.distance_preview_canvas
         if c is None or not c.winfo_exists():
             return
         c.delete("all")
-        c.create_text(32, 20, text="光源", fill="#5c4200", font=("Microsoft YaHei", 10, "bold"), anchor="w")
+        c.create_text(32, 20, text="光源", fill="#5c4200", font=("Microsoft YaHei", max(13, int(13 * self.font_scale)), "bold"), anchor="w")
         c.create_oval(24, 28, 56, 60, fill="#ffd56f", outline="#c48a1f", width=1)
-        x0 = 80
-        x1 = 680
+        x0, x1 = self._distance_preview_range()
+        self._distance_preview_bounds = (x0, x1)
         y = 72
         c.create_line(x0, y, x1, y, fill="#3b4f6b", width=2)
         for d in range(5, 101, 5):
@@ -861,22 +1016,24 @@ class ExperimentOneTab:
             tick_h = 16 if d % 10 == 0 else 9
             c.create_line(x, y, x, y - tick_h, fill="#3b4f6b", width=1)
             if d % 10 == 0:
-                c.create_text(x, y + 12, text=str(d), fill="#3b4f6b", font=("Consolas", 8))
-        c.create_text(x1 + 8, y + 12, text="cm", fill="#3b4f6b", font=("Consolas", 8), anchor="w")
+                c.create_text(x, y + 12, text=str(d), fill="#3b4f6b", font=("Consolas", max(12, int(12 * self.font_scale))))
+        c.create_text(x1 + 8, y + 12, text="cm", fill="#3b4f6b", font=("Consolas", max(12, int(12 * self.font_scale))), anchor="w")
         self.distance_indicator_id = c.create_rectangle(0, 32, 0, 62, fill="#2a6fbb", outline="#1d4f86", width=1)
 
     def _update_distance_preview(self, dist_cm):
         c = self.distance_preview_canvas
         if c is None or not c.winfo_exists() or self.distance_indicator_id is None:
             return
-        x0 = 80
-        x1 = 680
+        if self._distance_preview_bounds is None:
+            x0, x1 = self._distance_preview_range()
+        else:
+            x0, x1 = self._distance_preview_bounds
         t = (dist_cm - 5.0) / 95.0
         x = x0 + t * (x1 - x0)
         c.coords(self.distance_indicator_id, x - 14, 32, x + 14, 62)
         c.itemconfigure(self.distance_indicator_id)
         c.delete("panel_lbl")
-        c.create_text(x, 24, text="太阳能板", fill="#1d4f86", font=("Microsoft YaHei", 9, "bold"), tags="panel_lbl")
+        c.create_text(x, 24, text="太阳能板", fill="#1d4f86", font=("Microsoft YaHei", max(12, int(12 * self.font_scale)), "bold"), tags="panel_lbl")
 
     def _update_distance_reading_preview(self, dist_cm):
         v_val, i_val = self._measure_ui_from_distance_data(dist_cm)
@@ -918,11 +1075,11 @@ class ExperimentOneTab:
         dlg.grab_set()
 
         tk.Label(dlg, text="电阻箱阻值设定", bg=ACCENT, fg="#fff",
-                 font=("Microsoft YaHei", 12, "bold")).pack(fill=tk.X, ipady=6)
+                 font=("Microsoft YaHei", max(16, int(16 * self.font_scale)), "bold")).pack(fill=tk.X, ipady=6)
         tk.Label(dlg, text="输入阻值 R (Ω)", bg=BG, fg=FG,
-                 font=("Microsoft YaHei", 10)).pack(pady=(14, 6))
+                 font=("Microsoft YaHei", max(12, int(12 * self.font_scale)))).pack(pady=(14, 6))
         v = tk.StringVar(value=str(self.r_value))
-        e = tk.Entry(dlg, textvariable=v, font=("Consolas", 12), width=14,
+        e = tk.Entry(dlg, textvariable=v, font=("Consolas", max(15, int(15 * self.font_scale))), width=14,
                      bg="#1a1a1a", fg="#00ff88", insertbackground="#00ff88",
                      relief=tk.SUNKEN, bd=2)
         bind_numeric_entry(e, allow_decimal=True)
@@ -1152,11 +1309,12 @@ class ExperimentOneTab:
         self._show_toast("已切换到 {} 接线模式".format("短路电流 Isc" if mode == "isc" else "开路电压 Voc"))
 
     def _layout_devices_for_large_scene(self):
-        self.devices["lamp"]["x"], self.devices["lamp"]["y"] = 70, 70
-        self.devices["panel"]["x"], self.devices["panel"]["y"] = 380, 60
-        self.devices["amm"]["x"], self.devices["amm"]["y"] = 70, 240
-        self.devices["res"]["x"], self.devices["res"]["y"] = 420, 250
-        self.devices["vol"]["x"], self.devices["vol"]["y"] = 220, 420
+        s = getattr(self, "device_scale", self.ui_scale)
+        self.devices["lamp"]["x"], self.devices["lamp"]["y"] = int(70 * s), int(70 * s)
+        self.devices["panel"]["x"], self.devices["panel"]["y"] = int(380 * s), int(60 * s)
+        self.devices["amm"]["x"], self.devices["amm"]["y"] = int(70 * s), int(240 * s)
+        self.devices["res"]["x"], self.devices["res"]["y"] = int(420 * s), int(250 * s)
+        self.devices["vol"]["x"], self.devices["vol"]["y"] = int(220 * s), int(420 * s)
 
     def _update_circuit_diagram(self):
         if self.circuit_canvas is None or not self.circuit_canvas.winfo_exists():
@@ -1165,7 +1323,7 @@ class ExperimentOneTab:
         c.delete("all")
         c.create_rectangle(0, 0, 320, 250, fill="#f7f4e8", outline="#20242d", width=1)
         c.create_text(160, 16, text="当前接线图", fill="#111",
-                      font=("Microsoft YaHei", 10, "bold"))
+                      font=("Microsoft YaHei", max(13, int(13 * self.font_scale)), "bold"))
 
         p = {
             "panel_p": (96, 88), "panel_n": (96, 128),
@@ -1188,19 +1346,19 @@ class ExperimentOneTab:
             c.create_line(gx, 68, gx, 148, fill="#444", width=1)
         for gy in (92, 124):
             c.create_line(34, gy, 90, gy, fill="#444", width=1)
-        c.create_text(62, 174, text="电池板", fill="#111", font=("Microsoft YaHei", 9, "bold"))
+        c.create_text(62, 174, text="电池板", fill="#111", font=("Microsoft YaHei", max(12, int(12 * self.font_scale)), "bold"))
 
         # A 圈
         c.create_oval(132, 66, 176, 110, outline="#111", width=2, fill="#fffdf2")
-        c.create_text(154, 88, text="A", fill="#111", font=("Consolas", 15, "bold"))
+        c.create_text(154, 88, text="A", fill="#111", font=("Consolas", max(18, int(18 * self.font_scale)), "bold"))
 
         # 电阻箱
         c.create_rectangle(218, 62, 286, 114, outline="#111", width=2, fill="#fffdf2")
-        c.create_text(252, 88, text="电阻箱", fill="#111", font=("Microsoft YaHei", 9, "bold"))
+        c.create_text(252, 88, text="电阻箱", fill="#111", font=("Microsoft YaHei", max(12, int(12 * self.font_scale)), "bold"))
 
         # V 圈
         c.create_oval(230, 152, 274, 196, outline="#111", width=2, fill="#fffdf2")
-        c.create_text(252, 174, text="V", fill="#111", font=("Consolas", 15, "bold"))
+        c.create_text(252, 174, text="V", fill="#111", font=("Consolas", max(18, int(18 * self.font_scale)), "bold"))
 
         for tid, (x, y) in p.items():
             connected = any(tid in pair for pair in self.wires)
@@ -1224,12 +1382,12 @@ class ExperimentOneTab:
 
     def _build_resistance_box(self, parent):
         tk.Label(parent, text="━━━ 负载电阻 ━━━", bg=PANEL_BG, fg=ACCENT,
-                 font=("Microsoft YaHei", 10, "bold")).pack(anchor="w", padx=10, pady=(0, 2))
+                 font=("Microsoft YaHei", max(13, int(13 * self.font_scale)), "bold")).pack(anchor="w", padx=10, pady=(0, 2))
         box = tk.Frame(parent, bg="#1e1e1e", relief=tk.RAISED, bd=1)
         box.pack(fill=tk.X, padx=10, pady=4)
 
         tk.Label(box, text="电阻箱 (Ω)", bg="#1e1e1e", fg="#ff6b35",
-                 font=("Microsoft YaHei", 9, "bold")).pack(pady=(4, 2))
+                 font=("Microsoft YaHei", max(12, int(12 * self.font_scale)), "bold")).pack(pady=(4, 2))
 
         # 旋钮区
         knobs = tk.Frame(box, bg="#1e1e1e")
@@ -1241,11 +1399,11 @@ class ExperimentOneTab:
             col = tk.Frame(knobs, bg="#2b2b2b")
             col.pack(side=tk.LEFT, padx=1)
             tk.Label(col, text=lbl, bg="#2b2b2b", fg="#aaa",
-                     font=("Consolas", 7)).pack()
+                     font=("Consolas", max(12, int(12 * self.font_scale)))).pack()
             ttk.Button(col, text="▲", style="Assist.TButton",
                        command=lambda idx=i: self._r_digit_inc(idx)).pack(pady=1)
             digit_lbl = tk.Label(col, text="0", bg="#1a1a1a", fg="#ff6b35",
-                                 width=2, font=("Consolas", 13, "bold"))
+                                 width=2, font=("Consolas", max(16, int(16 * self.font_scale)), "bold"))
             digit_lbl.pack(pady=1)
             ttk.Button(col, text="▼", style="Assist.TButton",
                        command=lambda idx=i: self._r_digit_dec(idx)).pack(pady=1)
@@ -1253,7 +1411,7 @@ class ExperimentOneTab:
 
         # 总电阻显示
         self.r_total_label = tk.Label(box, text="R = 0.0 Ω", bg="#1e1e1e",
-                                      fg="#00ff88", font=("Consolas", 12, "bold"))
+                                      fg="#00ff88", font=("Consolas", max(16, int(16 * self.font_scale)), "bold"))
         self.r_total_label.pack(pady=(4, 4))
         self.r_value = 0.0
 
@@ -1261,17 +1419,17 @@ class ExperimentOneTab:
         manual_f = tk.Frame(box, bg="#1e1e1e")
         manual_f.pack(fill=tk.X, padx=8, pady=(0, 6))
         tk.Label(manual_f, text="直接输入:", bg="#1e1e1e", fg="#aaa",
-                 font=("Microsoft YaHei", 8)).pack(side=tk.LEFT)
+                 font=("Microsoft YaHei", max(12, int(12 * self.font_scale)))).pack(side=tk.LEFT)
         self.r_manual_var = tk.StringVar(value="")
         r_manual_entry = tk.Entry(manual_f, textvariable=self.r_manual_var,
-                                  font=("Consolas", 11), bg="#1a1a1a", fg="#00ff88",
+                                  font=("Consolas", max(13, int(13 * self.font_scale))), bg="#1a1a1a", fg="#00ff88",
                                   insertbackground="#00ff88", width=8,
                                   relief=tk.SUNKEN, bd=1)
         bind_numeric_entry(r_manual_entry, allow_decimal=True)
         r_manual_entry.pack(side=tk.LEFT, padx=4)
         r_manual_entry.bind("<Return>", self._on_r_manual_enter)
         tk.Label(manual_f, text="Ω", bg="#1e1e1e", fg="#aaa",
-                 font=("Consolas", 9)).pack(side=tk.LEFT)
+                 font=("Consolas", max(12, int(12 * self.font_scale)))).pack(side=tk.LEFT)
         ttk.Button(manual_f, text="设定", style="Assist.TButton",
                    command=lambda: self._on_r_manual_enter(None)).pack(side=tk.LEFT, padx=2)
 
@@ -1366,7 +1524,7 @@ class ExperimentOneTab:
         hdr = tk.Frame(win, bg=PANEL_BG)
         hdr.pack(fill=tk.X, padx=8, pady=(8, 4))
         tk.Label(hdr, text="实验数据记录", bg=PANEL_BG, fg=ACCENT,
-                 font=("Microsoft YaHei", 11, "bold")).pack(side=tk.LEFT)
+                 font=("Microsoft YaHei", max(14, int(14 * self.font_scale)), "bold")).pack(side=tk.LEFT)
         ttk.Button(hdr, text="删除选中行", style="Assist.TButton",
                    command=self._delete_selected).pack(side=tk.RIGHT, padx=4)
 
@@ -1794,12 +1952,12 @@ class ExperimentOneTab:
         dlg.grab_set()
 
         tk.Label(dlg, text="编辑 {}".format(field_text), bg=ACCENT, fg="#fff",
-                 font=("Microsoft YaHei", 12, "bold")).pack(fill=tk.X, ipady=6)
+                 font=("Microsoft YaHei", max(16, int(16 * self.font_scale)), "bold")).pack(fill=tk.X, ipady=6)
         tk.Label(dlg, text="原值: {:.3f}".format(old_val), bg=BG, fg="#aaa",
-                 font=("Consolas", 10)).pack(pady=(14, 8))
+                 font=("Consolas", max(13, int(13 * self.font_scale)))).pack(pady=(14, 8))
 
         v = tk.StringVar(value=str(old_val))
-        e = tk.Entry(dlg, textvariable=v, font=("Consolas", 12), width=16,
+        e = tk.Entry(dlg, textvariable=v, font=("Consolas", max(15, int(15 * self.font_scale))), width=16,
                      bg="#1a1a1a", fg="#00ff88", insertbackground="#00ff88",
                      relief=tk.SUNKEN, bd=2)
         bind_numeric_entry(e, allow_decimal=True)
@@ -1876,7 +2034,7 @@ class ExperimentOneTab:
         y = self.frame.winfo_rooty() + 80
         toast.geometry("300x36+{}+{}".format(x, y))
         tk.Label(toast, text=msg, bg="#ff4444", fg="#fff",
-                 font=("Microsoft YaHei", 10, "bold")).pack(expand=True, fill=tk.BOTH)
+                 font=("Microsoft YaHei", max(11, int(11 * self.ui_scale)), "bold")).pack(expand=True, fill=tk.BOTH)
         toast.after(2500, toast.destroy)
 
     def _clear_data(self):
@@ -2164,7 +2322,7 @@ class ExperimentOneTab:
             win.resizable(False, False)
 
             tk.Label(win, text="数据分析结果", bg=ACCENT, fg="#fff",
-                     font=("Microsoft YaHei", 14, "bold")).pack(fill=tk.X, ipady=8)
+                     font=("Microsoft YaHei", max(18, int(18 * self.font_scale)), "bold")).pack(fill=tk.X, ipady=8)
             tk.Label(win, text="", bg=BG).pack(pady=(8, 6))
             table = tk.Frame(win, bg=PANEL_BG)
             table.pack(fill=tk.X, padx=30)
@@ -2180,9 +2338,9 @@ class ExperimentOneTab:
                 row = tk.Frame(table, bg=bg_c)
                 row.pack(fill=tk.X, ipady=6)
                 tk.Label(row, text="  " + label, bg=bg_c, fg="#ffffff",
-                         font=("Microsoft YaHei", 11), anchor="w").pack(side=tk.LEFT)
+                         font=("Microsoft YaHei", max(13, int(13 * self.font_scale))), anchor="w").pack(side=tk.LEFT)
                 tk.Label(row, text=value + "  ", bg=bg_c, fg="#ffffff",
-                         font=("Consolas", 13, "bold"), anchor="e").pack(side=tk.RIGHT)
+                         font=("Consolas", max(16, int(16 * self.font_scale)), "bold"), anchor="e").pack(side=tk.RIGHT)
             tk.Label(win, text="", bg=BG).pack(pady=8)
             ttk.Button(win, text="关闭", style="Assist.TButton",
                        command=win.destroy).pack(ipady=2, padx=20)
@@ -2210,7 +2368,7 @@ class ExperimentOneTab:
         win.resizable(False, False)
 
         tk.Label(win, text="数据分析结果", bg=ACCENT, fg="#fff",
-                 font=("Microsoft YaHei", 14, "bold")).pack(fill=tk.X, ipady=8)
+                 font=("Microsoft YaHei", max(18, int(18 * self.font_scale)), "bold")).pack(fill=tk.X, ipady=8)
         tk.Label(win, text="", bg=BG).pack(pady=(8, 6))
 
         table = tk.Frame(win, bg=PANEL_BG)
@@ -2230,9 +2388,9 @@ class ExperimentOneTab:
             row = tk.Frame(table, bg=bg_c)
             row.pack(fill=tk.X, ipady=6)
             tk.Label(row, text="  " + label, bg=bg_c, fg="#ffffff",
-                     font=("Microsoft YaHei", 11), anchor="w").pack(side=tk.LEFT)
+                     font=("Microsoft YaHei", max(13, int(13 * self.font_scale))), anchor="w").pack(side=tk.LEFT)
             tk.Label(row, text=value + "  ", bg=bg_c, fg="#ffffff",
-                     font=("Consolas", 13, "bold"), anchor="e").pack(side=tk.RIGHT)
+                     font=("Consolas", max(16, int(16 * self.font_scale)), "bold"), anchor="e").pack(side=tk.RIGHT)
 
         tk.Label(win, text="", bg=BG).pack(pady=8)
         ttk.Button(win, text="关闭", style="Assist.TButton",
@@ -2439,12 +2597,12 @@ class ExperimentTab:
 
     def _build_control(self, parent):
         tk.Label(parent, text="电池类型", bg=PANEL_BG, fg=FG,
-                 font=("Microsoft YaHei", 10, "bold")).pack(anchor="w", padx=10, pady=(10, 2))
+                 font=("Microsoft YaHei", max(13, int(13 * self.font_scale)), "bold")).pack(anchor="w", padx=10, pady=(10, 2))
         tf = tk.Frame(parent, bg=PANEL_BG)
         tf.pack(fill=tk.X, padx=10)
         self.cell_type_var = tk.StringVar(value="single")
         tk.Label(tf, text="单晶硅", bg=PANEL_BG, fg=FG,
-                 font=("Microsoft YaHei", 9)).pack(side=tk.LEFT, padx=5)
+                 font=("Microsoft YaHei", max(12, int(12 * self.font_scale)))).pack(side=tk.LEFT, padx=5)
         ttk.Separator(parent, orient="horizontal").pack(fill=tk.X, padx=10, pady=6)
 
         if self.experiment_type == "distance":
@@ -2455,20 +2613,20 @@ class ExperimentTab:
         ttk.Separator(parent, orient="horizontal").pack(fill=tk.X, padx=10, pady=6)
 
         tk.Label(parent, text="━━━ 实时读数 ━━━", bg=PANEL_BG, fg="#888",
-                 font=("Consolas", 9)).pack(pady=(4, 6))
+                 font=("Consolas", max(12, int(12 * self.font_scale)))).pack(pady=(4, 6))
         v_text = "Voc = 0.000 V" if self.experiment_type == "distance" else "U = 0.000 V"
         i_text = "Isc = 0.000 mA" if self.experiment_type == "distance" else "I = 0.000 mA"
         p_text = "E = 0 W/m²" if self.experiment_type == "distance" else "P = 0.000 mW"
         self.reading_v = tk.Label(parent, text=v_text, bg="#0a0a0a",
-                                  fg="#00ff88", font=("Consolas", 16, "bold"),
+                                  fg="#00ff88", font=("Consolas", max(20, int(20 * self.font_scale)), "bold"),
                                   relief=tk.SUNKEN, bd=2, padx=8, pady=4)
         self.reading_v.pack(fill=tk.X, padx=10, pady=2)
         self.reading_i = tk.Label(parent, text=i_text, bg="#0a0a0a",
-                                  fg="#00ff88", font=("Consolas", 16, "bold"),
+                                  fg="#00ff88", font=("Consolas", max(20, int(20 * self.font_scale)), "bold"),
                                   relief=tk.SUNKEN, bd=2, padx=8, pady=4)
         self.reading_i.pack(fill=tk.X, padx=10, pady=2)
         self.reading_p = tk.Label(parent, text=p_text, bg="#0a0a0a",
-                                  fg="#ffcc00", font=("Consolas", 14, "bold"),
+                                  fg="#ffcc00", font=("Consolas", max(18, int(18 * self.font_scale)), "bold"),
                                   relief=tk.SUNKEN, bd=2, padx=8, pady=4)
         self.reading_p.pack(fill=tk.X, padx=10, pady=2)
         self._update_reading()
@@ -2485,50 +2643,50 @@ class ExperimentTab:
 
     def _build_distance_control(self, parent):
         tk.Label(parent, text="━━━ 光源距离 ━━━", bg=PANEL_BG, fg=ACCENT,
-                 font=("Microsoft YaHei", 10, "bold")).pack(anchor="w", padx=10, pady=(0, 2))
+                 font=("Microsoft YaHei", max(13, int(13 * self.font_scale)), "bold")).pack(anchor="w", padx=10, pady=(0, 2))
         self.dist_var = tk.DoubleVar(value=30.0)
         tk.Scale(parent, from_=5, to=100, orient=tk.HORIZONTAL,
                  variable=self.dist_var, bg=PANEL_BG, fg=FG,
                  troughcolor="#333", highlightthickness=0,
                  resolution=1, showvalue=True, length=200,
-                 font=("Consolas", 9),
+                 font=("Consolas", max(12, int(12 * self.font_scale))),
                  command=self._on_distance_change).pack(fill=tk.X, padx=10)
         self.dist_label = tk.Label(parent, text="d = 30 cm", bg=PANEL_BG, fg=FG,
-                                   font=("Consolas", 12, "bold"))
+                                   font=("Consolas", max(16, int(16 * self.font_scale)), "bold"))
         self.dist_label.pack(pady=4)
         info = tk.Frame(parent, bg=PANEL_BG)
         info.pack(fill=tk.X, padx=10, pady=4)
         tk.Label(info, text="固定条件:", bg=PANEL_BG, fg="#888",
-                 font=("Microsoft YaHei", 9)).pack(anchor="w")
+                 font=("Microsoft YaHei", max(12, int(12 * self.font_scale)))).pack(anchor="w")
         tk.Label(info, text="  光源功率: 100 W", bg=PANEL_BG, fg=FG,
-                 font=("Microsoft YaHei", 9)).pack(anchor="w")
+                 font=("Microsoft YaHei", max(12, int(12 * self.font_scale)))).pack(anchor="w")
         tk.Label(info, text="  测量: 开路电压 Voc / 短路电流 Isc", bg=PANEL_BG, fg=FG,
-                 font=("Microsoft YaHei", 9)).pack(anchor="w")
+                 font=("Microsoft YaHei", max(12, int(12 * self.font_scale)))).pack(anchor="w")
 
     def _build_light_control(self, parent):
         tk.Label(parent, text="━━━ 光源功率 ━━━", bg=PANEL_BG, fg=ACCENT,
-                 font=("Microsoft YaHei", 10, "bold")).pack(anchor="w", padx=10, pady=(0, 2))
+                 font=("Microsoft YaHei", max(13, int(13 * self.font_scale)), "bold")).pack(anchor="w", padx=10, pady=(0, 2))
         self.power_var = tk.DoubleVar(value=100.0)
         tk.Scale(parent, from_=10, to=300, orient=tk.HORIZONTAL,
                  variable=self.power_var, bg=PANEL_BG, fg=FG,
                  troughcolor="#333", highlightthickness=0,
                  resolution=5, showvalue=True, length=200,
-                 font=("Consolas", 9),
+                 font=("Consolas", max(12, int(12 * self.font_scale))),
                  command=self._on_power_change).pack(fill=tk.X, padx=10)
         self.power_label = tk.Label(parent, text="P_lamp = 100 W", bg=PANEL_BG, fg=FG,
-                                    font=("Consolas", 12, "bold"))
+                                    font=("Consolas", max(16, int(16 * self.font_scale)), "bold"))
         self.power_label.pack(pady=4)
         self.intensity_label = tk.Label(parent, text="E = {:.0f} W/m²".format(self.light_intensity), bg=PANEL_BG,
-                                        fg="#aaa", font=("Consolas", 10))
+                                        fg="#aaa", font=("Consolas", max(13, int(13 * self.font_scale))))
         self.intensity_label.pack()
         info = tk.Frame(parent, bg=PANEL_BG)
         info.pack(fill=tk.X, padx=10, pady=4)
         tk.Label(info, text="固定条件:", bg=PANEL_BG, fg="#888",
-                 font=("Microsoft YaHei", 9)).pack(anchor="w")
+                 font=("Microsoft YaHei", max(12, int(12 * self.font_scale)))).pack(anchor="w")
         tk.Label(info, text="  光源-板距离: 30 cm", bg=PANEL_BG, fg=FG,
-                 font=("Microsoft YaHei", 9)).pack(anchor="w")
+                 font=("Microsoft YaHei", max(12, int(12 * self.font_scale)))).pack(anchor="w")
         tk.Label(info, text="  负载电阻: 100 Ω", bg=PANEL_BG, fg=FG,
-                 font=("Microsoft YaHei", 9)).pack(anchor="w")
+                 font=("Microsoft YaHei", max(12, int(12 * self.font_scale)))).pack(anchor="w")
 
     def _build_right(self, parent):
         chart_frame = tk.Frame(parent, bg=BG)
@@ -2546,7 +2704,7 @@ class ExperimentTab:
         hdr = tk.Frame(table_frame, bg=PANEL_BG)
         hdr.pack(fill=tk.X, padx=8, pady=(4, 2))
         tk.Label(hdr, text="实验数据记录", bg=PANEL_BG, fg=ACCENT,
-                 font=("Microsoft YaHei", 10, "bold")).pack(side=tk.LEFT)
+                 font=("Microsoft YaHei", max(13, int(13 * self.font_scale)), "bold")).pack(side=tk.LEFT)
         ttk.Button(hdr, text="删除选中行", style="Assist.TButton",
                    command=self._delete_selected).pack(side=tk.RIGHT, padx=4)
 
@@ -2692,7 +2850,7 @@ class ExperimentTab:
         y = self.frame.winfo_rooty() + 80
         toast.geometry("300x36+{}+{}".format(x, y))
         tk.Label(toast, text=msg, bg="#ff4444", fg="#fff",
-                 font=("Microsoft YaHei", 10, "bold")).pack(expand=True, fill=tk.BOTH)
+                 font=("Microsoft YaHei", max(11, int(11 * self.ui_scale)), "bold")).pack(expand=True, fill=tk.BOTH)
         toast.after(2000, toast.destroy)
 
     def _clear_data(self):
@@ -2787,6 +2945,7 @@ class EssayTab:
         self.frame = parent_frame
         top = self.frame.winfo_toplevel()
         self.screen_w = int(top.winfo_screenwidth() or 1920)
+        self.font_scale = getattr(top, "font_scale", 1.25)
         self._build()
 
     def _build(self):
@@ -2822,8 +2981,8 @@ class EssayTab:
             row = tk.Frame(left, bg=PANEL_BG)
             row.pack(fill=tk.X, padx=10, pady=3)
             tk.Label(row, text=text, bg=PANEL_BG, fg=FG, anchor="w",
-                     font=("Microsoft YaHei", 10)).pack(fill=tk.X)
-            ent = tk.Entry(row, textvariable=self.vars[key], font=("Consolas", 11),
+                     font=("Microsoft YaHei", max(12, int(12 * self.font_scale)))).pack(fill=tk.X)
+            ent = tk.Entry(row, textvariable=self.vars[key], font=("Consolas", max(13, int(13 * self.font_scale))),
                            bg="#fff", fg="#111")
             bind_numeric_entry(ent, allow_decimal=True)
             if key in readonly_keys:
@@ -2856,7 +3015,7 @@ class EssayTab:
         self.result_tree.tag_configure("best", background="#ffe56a", foreground="#111111")
 
         self.summary_lbl = tk.Label(right, text="", bg=BG, fg=FG, justify="left",
-                                    anchor="w", font=("Microsoft YaHei", 10))
+                                    anchor="w", font=("Microsoft YaHei", max(12, int(12 * self.font_scale))))
         self.summary_lbl.pack(fill=tk.X, padx=4, pady=(2, 0))
         self._calc()
 
@@ -2969,21 +3128,31 @@ class SolarCellApp:
         self.root.title("太阳能电池特性测量")
         sw = int(self.root.winfo_screenwidth() or 1920)
         sh = int(self.root.winfo_screenheight() or 1080)
-        w = clamp(int(sw * 0.92), 1180, 1920)
-        h = clamp(int(sh * 0.88), 700, 1080)
+        self.ui_scale = calc_ui_scale(sw, sh)
+        self.font_scale = max(self.ui_scale, 1.25)
+        self.menu_font = ("Microsoft YaHei", max(13, int(13 * self.font_scale)))
+        self.root.ui_scale = self.ui_scale
+        self.root.font_scale = self.font_scale
+        w = clamp(int(sw * 0.92), 1180, int(sw * 0.96))
+        h = clamp(int(sh * 0.88), 700, int(sh * 0.92))
         self.root.geometry(f"{w}x{h}")
         self.root.configure(bg=BG)
         self.root.minsize(1100, 680)
-        configure_ttk_theme(self.root)
+        configure_ttk_theme(self.root, self.ui_scale, self.font_scale)
+        try:
+            self.root.tk.call("tk", "scaling", self.font_scale)
+        except Exception:
+            pass
         self._build_ui()
 
     def _build_ui(self):
-        header = tk.Frame(self.root, bg=ACCENT, height=36)
+        header_h = max(48, int(48 * self.ui_scale))
+        header = tk.Frame(self.root, bg=ACCENT, height=header_h)
         header.pack(fill=tk.X)
         header.pack_propagate(False)
         tk.Label(header, text="太阳能电池的特性测量",
                  bg=ACCENT, fg="#fff",
-                 font=("Microsoft YaHei", 13, "bold")).pack(side=tk.LEFT, padx=12)
+                 font=("Microsoft YaHei", max(18, int(18 * self.font_scale)), "bold")).pack(side=tk.LEFT, padx=max(14, int(14 * self.ui_scale)))
         right = tk.Frame(header, bg=ACCENT)
         right.pack(side=tk.RIGHT, padx=8)
         ttk.Button(right, text="设置", style="Assist.TButton",
@@ -3018,13 +3187,14 @@ class SolarCellApp:
         return "ext"
 
     def _apply_resolution(self, size_key):
-        sw = int(self.root.winfo_screenwidth() or 1920)
-        sh = int(self.root.winfo_screenheight() or 1080)
+        sw, sh = get_window_monitor_size(self.root)
         presets = {
-            "small": (1280, 720),
-            "medium": (1600, 900),
-            "large": (1920, 1080),
-            "auto": (clamp(int(sw * 0.92), 1180, 1920), clamp(int(sh * 0.88), 700, 1080)),
+            "720p": (1280, 720),
+            "1080p": (1920, 1080),
+            "1p5k": (2560, 1440),
+            "2k": (2560, 1440),
+            "4k": (3200, 1800),
+            "auto": (clamp(int(sw * 0.92), 1180, int(sw * 0.96)), clamp(int(sh * 0.88), 700, int(sh * 0.92))),
         }
         w, h = presets.get(size_key, presets["auto"])
         w = min(w, sw)
@@ -3044,13 +3214,15 @@ class SolarCellApp:
         self.root.after(30, lambda: self.root.geometry(f"{int(w)}x{int(h)}"))
 
     def _open_settings(self):
-        menu = tk.Menu(self.root, tearoff=0, bg="#f7f7f7", fg="#111111",
+        menu = tk.Menu(self.root, tearoff=0, bg="#f7f7f7", fg="#111111", font=self.menu_font,
                        activebackground="#d9ecff", activeforeground="#000000")
-        res_menu = tk.Menu(menu, tearoff=0, bg="#f7f7f7", fg="#111111",
+        res_menu = tk.Menu(menu, tearoff=0, bg="#f7f7f7", fg="#111111", font=self.menu_font,
                            activebackground="#d9ecff", activeforeground="#000000")
-        res_menu.add_command(label="小 (1280×720)", command=lambda: self._apply_resolution("small"))
-        res_menu.add_command(label="中 (1600×900)", command=lambda: self._apply_resolution("medium"))
-        res_menu.add_command(label="大 (1920×1080)", command=lambda: self._apply_resolution("large"))
+        res_menu.add_command(label="720p (1280×720)", command=lambda: self._apply_resolution("720p"))
+        res_menu.add_command(label="1080p (1920×1080)", command=lambda: self._apply_resolution("1080p"))
+        res_menu.add_command(label="1.5K (2560×1440)", command=lambda: self._apply_resolution("1p5k"))
+        res_menu.add_command(label="2K (2560×1440)", command=lambda: self._apply_resolution("2k"))
+        res_menu.add_command(label="4K (3200×1800)", command=lambda: self._apply_resolution("4k"))
         res_menu.add_separator()
         res_menu.add_command(label="跟随屏幕（推荐）", command=lambda: self._apply_resolution("auto"))
         menu.add_cascade(label="调整分辨率", menu=res_menu)
@@ -3065,7 +3237,7 @@ class SolarCellApp:
             menu.grab_release()
 
     def _open_toolbox(self):
-        menu = tk.Menu(self.root, tearoff=0, bg="#f7f7f7", fg="#111111",
+        menu = tk.Menu(self.root, tearoff=0, bg="#f7f7f7", fg="#111111", font=self.menu_font,
                        activebackground="#d9ecff", activeforeground="#000000")
         key = self._current_tab_key()
         if key == "exp1":
@@ -3098,7 +3270,7 @@ class SolarCellApp:
         win.resizable(False, False)
 
         tk.Label(win, text="使用说明", bg=ACCENT, fg="#fff",
-                 font=("Microsoft YaHei", 12, "bold")).pack(fill=tk.X, ipady=6)
+                 font=("Microsoft YaHei", max(16, int(16 * self.font_scale)), "bold")).pack(fill=tk.X, ipady=6)
         key = self._current_tab_key()
         if key == "exp1":
             msg = (
@@ -3122,7 +3294,7 @@ class SolarCellApp:
                 "3. 黄色高亮行为当前最优组合。"
             )
         tk.Label(win, text=msg, bg=BG, fg=FG, justify="left",
-                 anchor="nw", font=("Microsoft YaHei", 10)).pack(fill=tk.BOTH, expand=True, padx=12, pady=12)
+                 anchor="nw", font=("Microsoft YaHei", max(12, int(12 * self.font_scale)))).pack(fill=tk.BOTH, expand=True, padx=12, pady=12)
 
 
 def run():
