@@ -577,6 +577,9 @@ class ExperimentOneTab:
         self.scene_size = (w, h)
         self.scene.config(width=w, height=h)
         self._layout_devices_centered()
+        if self.is_distance_experiment:
+            self._set_distance_value(self.distance_cm, auto_record=False)
+            return
         self._draw_scene()
 
     def _layout_devices_centered(self):
@@ -613,10 +616,10 @@ class ExperimentOneTab:
         def _clamp_y(y, h):
             return int(clamp(y, top, bottom - h))
 
-        lamp_left_anchor = left_margin + avail_w * 0.22
+        lamp_left_anchor = left_margin + avail_w * 0.16
         lamp["x"] = _clamp_x(lamp_left_anchor - lamp["w"] * 0.5, lamp["w"])
         lamp["y"] = _clamp_y(y_top, lamp["h"])
-        panel["x"] = _clamp_x(cx + gap + panel["w"] * 0.15, panel["w"])
+        panel["x"] = _clamp_x(cx + gap + panel["w"] * 0.12, panel["w"])
         panel["y"] = _clamp_y(y_top - 6, panel["h"])
 
         amm["x"] = _clamp_x(cx - gap - amm["w"] + 8, amm["w"])
@@ -626,6 +629,22 @@ class ExperimentOneTab:
 
         vol["x"] = _clamp_x(cx - vol["w"] / 2.0, vol["w"])
         vol["y"] = _clamp_y(y_bot, vol["h"])
+        if self.is_distance_experiment:
+            min_x, max_x = self._panel_track_bounds()
+            t = (self.distance_cm - 5.0) / 95.0
+            panel["x"] = int(min_x + (max_x - min_x) * t)
+
+    def _panel_track_bounds(self):
+        """实验二太阳能板可移动范围：严格在灯右侧，并受场景右边界限制。"""
+        panel = self.devices["panel"]
+        lamp = self.devices["lamp"]
+        cw, _ch = self.scene_size
+        safe_gap = max(36, int(26 * self.ui_scale))
+        left_margin = 22
+        right_margin = 22
+        min_x = max(left_margin, lamp["x"] + lamp["w"] + safe_gap)
+        max_x = max(min_x + 20, cw - right_margin - panel["w"])
+        return float(min_x), float(max_x)
 
     def _start_timer(self):
         if not hasattr(self, "timer_var"):
@@ -962,21 +981,10 @@ class ExperimentOneTab:
         self.light_intensity = self._lookup_distance_light_intensity(self.distance_cm)
         if self.distance_preview_canvas is not None and self.distance_preview_canvas.winfo_exists():
             self._update_distance_preview(self.distance_cm)
-        # 在主实验台上同步太阳能板位置，形成“移动板子改距离”的视觉反馈
-        lamp_center_x = self.devices["lamp"]["x"] + self.devices["lamp"]["w"] / 2.0
-        s = getattr(self, "device_scale", self.ui_scale)
-        min_panel_x = 220.0 * s
-        max_panel_x = 700.0 * s
-        x_new = min_panel_x + (self.distance_cm - 5.0) / 95.0 * (max_panel_x - min_panel_x)
-        w_panel = self.devices["panel"]["w"]
-        lamp_right = self.devices["lamp"]["x"] + self.devices["lamp"]["w"]
-        safe_gap = max(36, int(26 * self.ui_scale))
-        min_from_lamp = lamp_right + safe_gap
-        x_left = x_new - w_panel / 2.0
-        x_left = max(min_panel_x, x_left)
-        x_left = max(min_from_lamp, x_left)
-        x_left = min(max_panel_x, x_left)
-        self.devices["panel"]["x"] = int(x_left)
+        # 在主实验台上同步太阳能板位置（5cm->最左，100cm->最右）
+        min_x, max_x = self._panel_track_bounds()
+        t = (self.distance_cm - 5.0) / 95.0
+        self.devices["panel"]["x"] = int(min_x + (max_x - min_x) * t)
         self._draw_scene()
         if auto_record:
             self._try_auto_record_on_distance_change()
