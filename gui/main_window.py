@@ -52,6 +52,13 @@ def calc_ui_scale(sw, sh):
     return clamp(min(sw / 1920.0, sh / 1080.0), 1.0, 2.0)
 
 
+def resource_dir():
+    """兼容源码运行与 PyInstaller 单文件运行的资源目录。"""
+    if hasattr(sys, "_MEIPASS"):
+        return os.path.join(getattr(sys, "_MEIPASS"), "res")
+    return os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "res")
+
+
 def get_window_monitor_size(win):
     try:
         hwnd = win.winfo_id()
@@ -372,7 +379,7 @@ class ExperimentOneTab:
         self._build()
 
     def _load_scene_assets(self):
-        base = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "res")
+        base = resource_dir()
         mapping = {
             "amm": {"svg": os.path.join(base, "ammeter_256.svg"), "png": os.path.join(base, "ammeter_256.png")},
             "vol": {"svg": os.path.join(base, "voltmeter_256.svg"), "png": os.path.join(base, "voltmeter_256.png")},
@@ -597,7 +604,8 @@ class ExperimentOneTab:
         y_top = top + avail_h * 0.10
         y_mid = top + avail_h * 0.45
         y_bot = top + avail_h * 0.72
-        gap = max(72, int(avail_w * 0.16))
+        # 灯固定偏左，面板/仪表围绕中区，保证视觉重心且留出右侧操作区
+        gap = max(72, int(avail_w * 0.14))
 
         def _clamp_x(x, w):
             return int(clamp(x, left_margin, cw - right_margin - w))
@@ -605,9 +613,10 @@ class ExperimentOneTab:
         def _clamp_y(y, h):
             return int(clamp(y, top, bottom - h))
 
-        lamp["x"] = _clamp_x(cx - gap - lamp["w"], lamp["w"])
+        lamp_left_anchor = left_margin + avail_w * 0.22
+        lamp["x"] = _clamp_x(lamp_left_anchor - lamp["w"] * 0.5, lamp["w"])
         lamp["y"] = _clamp_y(y_top, lamp["h"])
-        panel["x"] = _clamp_x(cx + gap, panel["w"])
+        panel["x"] = _clamp_x(cx + gap + panel["w"] * 0.15, panel["w"])
         panel["y"] = _clamp_y(y_top - 6, panel["h"])
 
         amm["x"] = _clamp_x(cx - gap - amm["w"] + 8, amm["w"])
@@ -960,7 +969,14 @@ class ExperimentOneTab:
         max_panel_x = 700.0 * s
         x_new = min_panel_x + (self.distance_cm - 5.0) / 95.0 * (max_panel_x - min_panel_x)
         w_panel = self.devices["panel"]["w"]
-        self.devices["panel"]["x"] = int(max(min_panel_x, min(max_panel_x, x_new - w_panel / 2.0)))
+        lamp_right = self.devices["lamp"]["x"] + self.devices["lamp"]["w"]
+        safe_gap = max(36, int(26 * self.ui_scale))
+        min_from_lamp = lamp_right + safe_gap
+        x_left = x_new - w_panel / 2.0
+        x_left = max(min_panel_x, x_left)
+        x_left = max(min_from_lamp, x_left)
+        x_left = min(max_panel_x, x_left)
+        self.devices["panel"]["x"] = int(x_left)
         self._draw_scene()
         if auto_record:
             self._try_auto_record_on_distance_change()
