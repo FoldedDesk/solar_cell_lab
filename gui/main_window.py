@@ -544,13 +544,18 @@ class ExperimentOneTab:
             ttk.Button(parent, text="一键连线", style="Assist.TButton",
                        command=self._auto_wire_for_test).pack(fill=tk.X, padx=10, pady=(2, 4), ipady=1)
         timer_bar = tk.Frame(parent, bg=PANEL_BG)
-        timer_bar.pack(fill=tk.X, padx=10, pady=(2, 6))
+        timer_bar.pack(fill=tk.X, padx=10, pady=(4, 8))
+        timer_bar.pack_propagate(False)
+        timer_h = clamp(int(self.screen_h * 0.045), 36, 54)
+        timer_bar.config(height=timer_h)
+        timer_font = clamp(int(timer_h * 0.45), 13, 20)
         tk.Label(timer_bar, text="实验已经进行:", bg=PANEL_BG, fg="#ba2f2f",
-                 font=("Microsoft YaHei", max(13, int(13 * self.font_scale)), "bold")).pack(side=tk.LEFT)
+                 font=("Microsoft YaHei", max(13, int(13 * self.font_scale)), "bold")).pack(side=tk.LEFT, padx=(0, 4), pady=2)
         self.timer_var = tk.StringVar(value="00:00:00")
         tk.Label(timer_bar, textvariable=self.timer_var, bg="#101010", fg="#ff2a2a",
-                 font=("Consolas", max(20, int(20 * self.font_scale)), "bold"), padx=8, pady=2).pack(side=tk.LEFT, padx=8)
+                 font=("Consolas", timer_font, "bold"), padx=8, pady=2).pack(side=tk.LEFT, padx=6, pady=2)
         self._start_timer()
+        self._layout_devices_centered()
         self._draw_scene()
 
     def _on_scene_host_resize(self, _event=None):
@@ -564,7 +569,54 @@ class ExperimentOneTab:
             return
         self.scene_size = (w, h)
         self.scene.config(width=w, height=h)
+        self._layout_devices_centered()
         self._draw_scene()
+
+    def _layout_devices_centered(self):
+        """按当前实验区尺寸将器材居中排布，确保不同分辨率都在中间区域可见。"""
+        cw, ch = self.scene_size
+        if cw <= 0 or ch <= 0:
+            return
+        # 有效实验区（避开顶部标题条和底部计时栏）
+        left_margin = 22
+        right_margin = 22
+        top = 48
+        bottom = ch - 34
+        if bottom <= top:
+            return
+        avail_w = max(300, cw - left_margin - right_margin)
+        avail_h = max(220, bottom - top)
+        cx = left_margin + avail_w / 2.0
+
+        lamp = self.devices["lamp"]
+        panel = self.devices["panel"]
+        amm = self.devices["amm"]
+        res = self.devices["res"]
+        vol = self.devices["vol"]
+
+        y_top = top + avail_h * 0.10
+        y_mid = top + avail_h * 0.45
+        y_bot = top + avail_h * 0.72
+        gap = max(72, int(avail_w * 0.16))
+
+        def _clamp_x(x, w):
+            return int(clamp(x, left_margin, cw - right_margin - w))
+
+        def _clamp_y(y, h):
+            return int(clamp(y, top, bottom - h))
+
+        lamp["x"] = _clamp_x(cx - gap - lamp["w"], lamp["w"])
+        lamp["y"] = _clamp_y(y_top, lamp["h"])
+        panel["x"] = _clamp_x(cx + gap, panel["w"])
+        panel["y"] = _clamp_y(y_top - 6, panel["h"])
+
+        amm["x"] = _clamp_x(cx - gap - amm["w"] + 8, amm["w"])
+        amm["y"] = _clamp_y(y_mid, amm["h"])
+        res["x"] = _clamp_x(cx + gap + 8, res["w"])
+        res["y"] = _clamp_y(y_mid, res["h"])
+
+        vol["x"] = _clamp_x(cx - vol["w"] / 2.0, vol["w"])
+        vol["y"] = _clamp_y(y_bot, vol["h"])
 
     def _start_timer(self):
         if not hasattr(self, "timer_var"):
