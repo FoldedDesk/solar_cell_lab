@@ -3064,7 +3064,7 @@ class EssayTab:
         wrap = tk.Frame(self.frame, bg=BG)
         wrap.pack(fill=tk.BOTH, expand=True, padx=0, pady=0)
 
-        left_w = clamp(int(self.screen_w * 0.1), 140, 220)
+        left_w = clamp(int(self.screen_w * 0.13), 180, 280)
         left = tk.Frame(wrap, bg=PANEL_BG, width=left_w)
         left.pack(side=tk.LEFT, fill=tk.Y, padx=(0, 10))
         left.pack_propagate(False)
@@ -3243,6 +3243,7 @@ class SolarCellApp:
         self.ui_scale = calc_ui_scale(sw, sh)
         self.font_scale = max(self.ui_scale, 1.25)
         self.menu_font = ("Microsoft YaHei", max(13, int(13 * self.font_scale)))
+        self.principle_visible = False
         self.root.ui_scale = self.ui_scale
         self.root.font_scale = self.font_scale
         w = clamp(int(sw * 0.92), 1180, int(sw * 0.96))
@@ -3271,11 +3272,20 @@ class SolarCellApp:
                    command=self._open_settings).pack(side=tk.LEFT, padx=(0, 4))
         ttk.Button(right, text="工具箱", style="Assist.TButton",
                    command=self._open_toolbox).pack(side=tk.LEFT, padx=(0, 4))
-        ttk.Button(right, text="帮助", style="Assist.TButton",
-                   command=self._open_help).pack(side=tk.LEFT)
+        ttk.Button(right, text="实验原理", style="Assist.TButton",
+                   command=self._toggle_principle).pack(side=tk.LEFT)
+
+        self.principle_bar = tk.Frame(self.root, bg="#eaf3fb")
+        self.principle_lbl = tk.Label(
+            self.principle_bar, text="", bg="#eaf3fb", fg="#1b3b5a",
+            justify="left", anchor="w", padx=12, pady=8,
+            font=("Microsoft YaHei", max(12, int(12 * self.font_scale)))
+        )
+        self.principle_lbl.pack(fill=tk.X)
 
         main = tk.Frame(self.root, bg=BG)
         main.pack(fill=tk.BOTH, expand=True, padx=8, pady=8)
+        self.main_container = main
         self.tabs = ttk.Notebook(main)
         self.tabs.pack(fill=tk.BOTH, expand=True)
 
@@ -3289,6 +3299,8 @@ class SolarCellApp:
         self.exp1 = ExperimentOneTab(exp1_frame, experiment_name="实验一")
         self.exp2 = ExperimentOneTab(exp2_frame, experiment_name="实验二")
         self.essay = EssayTab(essay_frame)
+        self.tabs.bind("<<NotebookTabChanged>>", self._on_tab_changed)
+        self.root.bind("<Configure>", self._on_root_resize)
 
     def _current_tab_key(self):
         idx = self.tabs.index(self.tabs.select())
@@ -3297,6 +3309,50 @@ class SolarCellApp:
         if idx == 1:
             return "exp2"
         return "ext"
+
+    def _principle_text(self):
+        key = self._current_tab_key()
+        if key == "exp1":
+            return (
+                "实验一：真实实验的原理基于光伏效应：太阳能电池内部的P-N结受光照后，电子与空穴分离并定向移动，"
+                "从而形成电压和电流。本实验中，程序模拟逐次调节电阻值，记录电压和电流，帮助实验者找到最大功率点并计算填充因子。"
+            )
+        if key == "exp2":
+            return (
+                "实验二：本实验中，实验者可从较弱光照逐档增强光强，记录开路电压和短路电流，"
+                "分别验证开路电压和短路电流与光强的关系。"
+            )
+        return (
+            "扩展实验：即使使用了相同数量的电池，但不同的串并联方式使得输出的总电压和总电流不同，输出功率特性也不一样。"
+            "对于固定的LED灯泡负载，需要找到一种最佳的串并联组合，使电池组输出的功率最大，从而点亮最多数量的灯泡。"
+            "本实验通过数据表格，展示不同连接方式下可带动的灯泡数量，帮助实验者理解电池阵列的连接方式对输出性能的影响。"
+        )
+
+    def _refresh_principle_text(self):
+        if not hasattr(self, "principle_lbl"):
+            return
+        wrap = max(600, int(self.root.winfo_width()) - 40)
+        self.principle_lbl.config(text=self._principle_text(), wraplength=wrap)
+
+    def _toggle_principle(self):
+        self.principle_visible = not self.principle_visible
+        if self.principle_visible:
+            self._refresh_principle_text()
+            kwargs = {"fill": tk.X, "padx": 8, "pady": (0, 6)}
+            if hasattr(self, "main_container") and self.main_container is not None:
+                self.principle_bar.pack(before=self.main_container, **kwargs)
+            else:
+                self.principle_bar.pack(**kwargs)
+        else:
+            self.principle_bar.pack_forget()
+
+    def _on_tab_changed(self, _event=None):
+        if self.principle_visible:
+            self._refresh_principle_text()
+
+    def _on_root_resize(self, _event=None):
+        if self.principle_visible:
+            self._refresh_principle_text()
 
     def _apply_resolution(self, size_key):
         sw, sh = get_window_monitor_size(self.root)
