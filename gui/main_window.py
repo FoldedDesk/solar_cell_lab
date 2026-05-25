@@ -1377,9 +1377,14 @@ class ExperimentOneTab:
             return
         if mode not in ("isc", "voc"):
             return
+        mode_changed = (self.exp2_measure_mode != mode)
         self.exp2_measure_mode = mode
         if mode == "isc":
             self._set_resistance_value(0.0)
+        if mode_changed:
+            # 切换 Isc/Voc 时清空旧导线，避免上一模式残留导线触发 forbidden 导致误判失败
+            self.wires.clear()
+            self._redraw_wires()
         self.connection_ok = False
         self._update_wire_status()
         self._show_toast("已切换到 {} 接线模式".format("短路电流 Isc" if mode == "isc" else "开路电压 Voc"))
