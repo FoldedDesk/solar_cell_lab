@@ -1284,34 +1284,65 @@ class ExperimentOneTab:
 
     def _update_wire_status(self):
         if self.is_distance_experiment:
-            if self.exp2_measure_mode == "isc":
-                required = {
-                    tuple(sorted(("panel_p", "amm_p"))),
-                    tuple(sorted(("amm_n", "panel_n"))),
-                }
-                forbidden = {
-                    tuple(sorted(("amm_n", "res_p"))),
-                    tuple(sorted(("res_n", "panel_n"))),
-                    tuple(sorted(("vol_p", "res_p"))),
-                    tuple(sorted(("vol_n", "res_n"))),
-                    tuple(sorted(("vol_p", "panel_p"))),
-                    tuple(sorted(("vol_n", "panel_n"))),
-                }
-                ok = required.issubset(self.wires) and not any(w in self.wires for w in forbidden)
+            # 实验二：按实际连线自动识别 Isc / Voc，不依赖手动模式，避免“接对但显示失败”。
+            isc_required_a = {
+                tuple(sorted(("panel_p", "amm_p"))),
+                tuple(sorted(("amm_n", "panel_n"))),
+            }
+            isc_required_b = {
+                tuple(sorted(("panel_p", "amm_n"))),
+                tuple(sorted(("amm_p", "panel_n"))),
+            }
+            isc_forbidden = {
+                tuple(sorted(("amm_n", "res_p"))),
+                tuple(sorted(("amm_p", "res_p"))),
+                tuple(sorted(("res_n", "panel_n"))),
+                tuple(sorted(("res_n", "panel_p"))),
+                tuple(sorted(("vol_p", "res_p"))),
+                tuple(sorted(("vol_n", "res_n"))),
+                tuple(sorted(("vol_p", "panel_p"))),
+                tuple(sorted(("vol_n", "panel_n"))),
+                tuple(sorted(("vol_p", "panel_n"))),
+                tuple(sorted(("vol_n", "panel_p"))),
+            }
+            isc_ok = (
+                (isc_required_a.issubset(self.wires) or isc_required_b.issubset(self.wires))
+                and not any(w in self.wires for w in isc_forbidden)
+            )
+
+            voc_required_a = {
+                tuple(sorted(("vol_p", "panel_p"))),
+                tuple(sorted(("vol_n", "panel_n"))),
+            }
+            voc_required_b = {
+                tuple(sorted(("vol_p", "panel_n"))),
+                tuple(sorted(("vol_n", "panel_p"))),
+            }
+            voc_forbidden = {
+                tuple(sorted(("panel_p", "amm_p"))),
+                tuple(sorted(("panel_p", "amm_n"))),
+                tuple(sorted(("amm_n", "panel_n"))),
+                tuple(sorted(("amm_p", "panel_n"))),
+                tuple(sorted(("amm_n", "res_p"))),
+                tuple(sorted(("amm_p", "res_p"))),
+                tuple(sorted(("res_n", "panel_n"))),
+                tuple(sorted(("res_n", "panel_p"))),
+                tuple(sorted(("vol_p", "res_p"))),
+                tuple(sorted(("vol_n", "res_n"))),
+            }
+            voc_ok = (
+                (voc_required_a.issubset(self.wires) or voc_required_b.issubset(self.wires))
+                and not any(w in self.wires for w in voc_forbidden)
+            )
+
+            if voc_ok and not isc_ok:
+                self.exp2_measure_mode = "voc"
+                ok = True
+            elif isc_ok and not voc_ok:
+                self.exp2_measure_mode = "isc"
+                ok = True
             else:
-                required = {
-                    tuple(sorted(("vol_p", "panel_p"))),
-                    tuple(sorted(("vol_n", "panel_n"))),
-                }
-                forbidden = {
-                    tuple(sorted(("panel_p", "amm_p"))),
-                    tuple(sorted(("amm_n", "panel_n"))),
-                    tuple(sorted(("amm_n", "res_p"))),
-                    tuple(sorted(("res_n", "panel_n"))),
-                    tuple(sorted(("vol_p", "res_p"))),
-                    tuple(sorted(("vol_n", "res_n"))),
-                }
-                ok = required.issubset(self.wires) and not any(w in self.wires for w in forbidden)
+                ok = False
         else:
             required = {
                 tuple(sorted(("panel_p", "amm_p"))),
